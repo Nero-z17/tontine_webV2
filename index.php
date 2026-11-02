@@ -23,50 +23,29 @@ require_once __DIR__ . '/includes/navbar.php';
     <!-- Voile sombre élégant pour faire ressortir le texte et la carte -->
     <div class="hero-video-overlay"></div>
 
-    <!-- Contenu au premier plan -->
-    <div class="container hero-video-content py-3">
-        <div class="row align-items-center g-4">
-            <div class="col-lg-7">
+    <!-- Contenu centré au premier plan (sans le cadre d'exemple à droite) -->
+    <div class="container hero-video-content py-4">
+        <div class="row justify-content-center text-center">
+            <div class="col-lg-9">
                 <span class="badge bg-success px-3 py-2 rounded-pill fw-semibold mb-3 shadow-sm">
                     <i class="bi bi-shield-check me-1"></i>FINTECH COMMUNAUTAIRE — CAMEROUN (FCFA)
                 </span>
                 <h1 class="display-5 fw-bold text-white mb-3">
                     Gérez votre tontine en toute transparence, sans cahier perdu ni calcul manuel.
                 </h1>
-                <p class="lead text-white-50 mb-4">
+                <p class="lead text-white-50 mx-auto mb-4" style="max-width: 720px;">
                     Tirage au sort aléatoire verrouillé, suivi en direct du pot du bouffeur de la séance, gestion automatique des retards sur pot et caisse de réserve par cycle.
                 </p>
-                <div class="d-flex flex-wrap gap-3">
+                <div class="d-flex flex-wrap justify-content-center gap-3">
                     <a href="<?= BASE_URL ?>/register-tontine.php" class="btn btn-glow-emerald btn-lg px-4">
                         <i class="bi bi-plus-circle-fill me-2"></i>Créer ma tontine (2 mois gratuits)
                     </a>
                     <a href="<?= BASE_URL ?>/join-tontine.php" class="btn btn-outline-light btn-lg px-4 rounded-3">
                         <i class="bi bi-people-fill me-2"></i>Rejoindre avec un code
                     </a>
-                </div>
-            </div>
-            <div class="col-lg-5">
-                <div class="card card-djangui p-4 shadow-lg">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <span class="badge bg-primary rounded-pill px-3 py-2">Aperçu Séance en Direct</span>
-                        <span class="small fw-bold text-success">MTN MoMo & Orange Money</span>
-                    </div>
-                    <h5 class="fw-bold mb-1">Djangui Solidarité Akwa</h5>
-                    <p class="text-muted small mb-3">Cotisation : 50 000 FCFA / membre · Pot par tour : 250 000 FCFA</p>
-                    <div class="p-3 rounded-3 box-adaptive mb-3">
-                        <div class="d-flex justify-content-between small mb-1">
-                            <span>Pot de la Séance Actuelle</span>
-                            <strong class="text-success">100 % sécurisé</strong>
-                        </div>
-                        <div class="progress" style="height: 10px;">
-                            <div class="progress-bar bg-success" style="width: 100%"></div>
-                        </div>
-                    </div>
-                    <div class="d-grid">
-                        <a href="<?= BASE_URL ?>/login.php" class="btn btn-glow-blue">
-                            <i class="bi bi-box-arrow-in-right me-2"></i>Tester avec les comptes de démonstration
-                        </a>
-                    </div>
+                    <a href="<?= BASE_URL ?>/login.php" class="btn btn-glow-blue btn-lg px-4">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>Se connecter
+                    </a>
                 </div>
             </div>
         </div>

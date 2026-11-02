@@ -9,12 +9,22 @@ $tontine_id = (int)$_SESSION['tontine_id'];
 $user_id    = (int)$_SESSION['user_id'];
 $est_admin  = (($_SESSION['role'] ?? '') === 'admin');
 
+// Liste des membres actifs et validés de la tontine (pour la sélection lors de la création d'un cycle)
+$stmtMembresDispo = $pdo->prepare("
+    SELECT id, nom_complet, telephone, role
+    FROM users
+    WHERE tontine_id = ? AND statut_membre = 'actif' AND statut_validation = 'accepte'
+    ORDER BY (role = 'admin') DESC, nom_complet ASC
+");
+$stmtMembresDispo->execute([$tontine_id]);
+$membres_actifs_tontine = $stmtMembresDispo->fetchAll();
+
 // 1. TRAITEMENT DES ACTIONS POST (ADMIN UNIQUEMENT : CRÉER CYCLE, ACTIVER, SUPPRIMER BROUILLON, LANCER TIRAGE)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
     verifier_csrf();
     $action = $_POST['action'] ?? '';
 
-    // ACTION A : Créer un nouveau cycle en brouillon (Pénalité partielle en % — Point 7 : Non-cotisation = 2x)
+    // ACTION A : Créer un nouveau cycle en brouillon avec choix des membres participants
     if ($action === 'creer_cycle') {
         $titre                = trim($_POST['titre'] ?? '');
         $montant_cotisation   = (float)($_POST['montant_cotisation'] ?? 0);
@@ -22,23 +32,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
         $pourcentage_penalite = (float)($_POST['pourcentage_penalite'] ?? 0);
         $date_debut           = trim($_POST['date_debut'] ?? '');
         $date_fin             = trim($_POST['date_fin'] ?? '');
+        $membres_saisis       = isset($_POST['membres_choisis']) && is_array($_POST['membres_choisis'])
+            ? array_map('intval', $_POST['membres_choisis'])
+            : [];
+
+        // Filtrer uniquement les IDs appartenant réellement aux membres actifs de cette tontine
+        $ids_autorises   = array_column($membres_actifs_tontine, 'id');
+        $membres_retenus = array_values(array_intersect($ids_autorises, $membres_saisis));
 
         $dt_debut = DateTime::createFromFormat('!Y-m-d', $date_debut);
         $dt_fin   = ($date_fin !== '') ? DateTime::createFromFormat('!Y-m-d', $date_fin) : null;
 
         if ($titre === '' || $montant_cotisation <= 0 || !$dt_debut) {
             message_flash('danger', 'Veuillez renseigner un titre, un montant de cotisation valide et une date de début.');
+        } elseif (count($membres_retenus) < 2) {
+            message_flash('danger', 'Veuillez sélectionner au moins 2 membres participants pour créer un cycle.');
         } elseif ($pourcentage_penalite < 0 || $pourcentage_penalite > 50) {
-            message_flash('danger', 'Le pourcentage de pénalité pour cotisation partielle doit être compris entre 0 % et 50 % (la non-cotisation vaut le double).');
+            message_flash('danger', 'Le pourcentage de pénalité pour cotisation partielle doit être compris entre 0 % et 50 %.');
         } elseif (!in_array($frequence, ['hebdo', 'bimensuel', 'mensuel'], true)) {
             message_flash('danger', 'Fréquence invalide.');
         } else {
             $montant_penalite_retard = round(($montant_cotisation * $pourcentage_penalite) / 100, 2);
-            $montant_non_cotisation  = round($montant_penalite_retard * 2, 2);
+            $pot_attendu             = round($montant_cotisation * count($membres_retenus), 2);
 
             $stmtMax = $pdo->prepare("SELECT COALESCE(MAX(numero_cycle), 0) + 1 FROM cycles WHERE tontine_id = ?");
             $stmtMax->execute([$tontine_id]);
             $prochain_num = (int)$stmtMax->fetchColumn();
+
+            $pdo->beginTransaction();
 
             $stmtIns = $pdo->prepare("
                 INSERT INTO cycles (
@@ -56,14 +77,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
                 $dt_debut->format('Y-m-d'),
                 $dt_fin ? $dt_fin->format('Y-m-d') : null
             ]);
+            $nouveau_cycle_id = (int)$pdo->lastInsertId();
 
-            message_flash('success', "Le cycle « {$titre} » a été créé en brouillon (Pénalité partielle : {$pourcentage_penalite}% = " . format_fcfa($montant_penalite_retard) . " | Non-cotisation : " . ($pourcentage_penalite * 2) . "% = " . format_fcfa($montant_non_cotisation) . ").");
+            // Enregistrer immédiatement les membres choisis dans cycle_members
+            $stmtInsCM = $pdo->prepare("INSERT INTO cycle_members (cycle_id, user_id, montant_pot_attendu) VALUES (?, ?, ?)");
+            foreach ($membres_retenus as $uid) {
+                $stmtInsCM->execute([$nouveau_cycle_id, (int)$uid, $pot_attendu]);
+            }
+
+            $pdo->commit();
+
+            message_flash('success', "Le cycle « {$titre} » a été créé avec " . count($membres_retenus) . " participant(s) sélectionné(s) (Pot par tour : " . format_fcfa($pot_attendu) . ").");
         }
         header('Location: ' . BASE_URL . '/cycles.php');
         exit;
     }
 
-    // ACTION B : Activer un cycle brouillon et inscrire tous les membres actifs
+    // ACTION B : Activer un cycle brouillon (en conservant les membres choisis à la création)
     if ($action === 'activer_cycle') {
         $cycle_id = (int)($_POST['cycle_id'] ?? 0);
 
@@ -80,23 +110,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
         $cBrouillon = $stmtC->fetch();
 
         if ($cBrouillon) {
-            $stmtMembres = $pdo->prepare("SELECT id FROM users WHERE tontine_id = ? AND statut_membre = 'actif' AND statut_validation = 'accepte' ORDER BY id ASC");
-            $stmtMembres->execute([$tontine_id]);
-            $ids_membres = $stmtMembres->fetchAll(PDO::FETCH_COLUMN);
+            $stmtNbInscrits = $pdo->prepare("SELECT COUNT(*) FROM cycle_members WHERE cycle_id = ?");
+            $stmtNbInscrits->execute([$cycle_id]);
+            $nb_inscrits = (int)$stmtNbInscrits->fetchColumn();
 
-            if (count($ids_membres) < 2) {
-                message_flash('danger', 'Il faut au moins 2 membres actifs et validés dans la tontine pour activer un cycle.');
-            } else {
-                $pdo->beginTransaction();
-                $pot_attendu = (float)$cBrouillon['montant_cotisation'] * count($ids_membres);
-
-                $pdo->prepare("UPDATE cycles SET statut = 'actif' WHERE id = ?")->execute([$cycle_id]);
-                $stmtInsCM = $pdo->prepare("INSERT IGNORE INTO cycle_members (cycle_id, user_id, montant_pot_attendu) VALUES (?, ?, ?)");
-                foreach ($ids_membres as $uid) {
-                    $stmtInsCM->execute([$cycle_id, (int)$uid, $pot_attendu]);
+            // Si c'est un ancien brouillon sans membres pré-enregistrés, on inscrit les membres actifs
+            if ($nb_inscrits === 0) {
+                $ids_membres = array_column($membres_actifs_tontine, 'id');
+                $nb_inscrits = count($ids_membres);
+                if ($nb_inscrits >= 2) {
+                    $pot_attendu = (float)$cBrouillon['montant_cotisation'] * $nb_inscrits;
+                    $stmtInsCM = $pdo->prepare("INSERT IGNORE INTO cycle_members (cycle_id, user_id, montant_pot_attendu) VALUES (?, ?, ?)");
+                    foreach ($ids_membres as $uid) {
+                        $stmtInsCM->execute([$cycle_id, (int)$uid, $pot_attendu]);
+                    }
                 }
-                $pdo->commit();
-                message_flash('success', 'Cycle activé avec ' . count($ids_membres) . ' participants ! Vous pouvez maintenant lancer le tirage au sort.');
+            }
+
+            if ($nb_inscrits < 2) {
+                message_flash('danger', 'Il faut au moins 2 membres inscrits dans ce cycle pour l\'activer.');
+            } else {
+                $pdo->prepare("UPDATE cycles SET statut = 'actif' WHERE id = ?")->execute([$cycle_id]);
+                message_flash('success', 'Cycle activé avec ' . $nb_inscrits . ' participants ! Vous pouvez maintenant lancer le tirage au sort.');
             }
         }
         header('Location: ' . BASE_URL . '/cycles.php?cycle_id=' . $cycle_id);
@@ -596,10 +631,10 @@ require_once __DIR__ . '/includes/navbar.php';
     <?php endif; ?>
 </main>
 
-<!-- MODALE ADMIN : CRÉER UN NOUVEAU CYCLE (Point 7 : Pénalité partielle en % et mention du double pour non-cotisation) -->
+<!-- MODALE ADMIN : CRÉER UN NOUVEAU CYCLE (AVEC CHOIX DES MEMBRES PARTICIPANTS) -->
 <?php if ($est_admin): ?>
 <div class="modal fade" id="modalNouveauCycle" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content card-djangui">
             <form method="POST" action="cycles.php">
                 <?= champ_csrf() ?>
@@ -641,7 +676,39 @@ require_once __DIR__ . '/includes/navbar.php';
                         </div>
                     </div>
 
-                    <!-- MENTION EXPLICATIVE GUIDÉE (POINTS 7 & 8) -->
+                    <!-- SÉLECTION DES MEMBRES QUI PARTICIPERONT À CE CYCLE -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label small fw-bold mb-0">
+                                <i class="bi bi-people-fill text-primary me-1"></i>Membres participants à ce cycle (<span id="nbMembresCoches"><?= count($membres_actifs_tontine) ?></span> sélectionné(s) — Pot par tour : <span id="apercuPotCycle" class="text-success">0 FCFA</span>) *
+                            </label>
+                            <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2" id="btnToggleTousMembres">
+                                Tout cocher / décocher
+                            </button>
+                        </div>
+
+                        <div class="p-3 rounded-3 box-adaptive" style="max-height: 190px; overflow-y: auto;">
+                            <?php if (empty($membres_actifs_tontine)): ?>
+                                <p class="text-danger small mb-0">Aucun membre actif trouvé dans la tontine.</p>
+                            <?php else: ?>
+                                <div class="row g-2">
+                                    <?php foreach ($membres_actifs_tontine as $mat): ?>
+                                        <div class="col-md-6">
+                                            <label class="form-check p-2 ps-4 rounded-2 bg-body border d-flex align-items-center gap-2 small w-100 m-0" style="cursor: pointer;">
+                                                <input class="form-check-input js-check-membre-cycle m-0" type="checkbox" name="membres_choisis[]" value="<?= (int)$mat['id'] ?>" checked>
+                                                <span class="text-truncate">
+                                                    <strong><?= e($mat['nom_complet']) ?></strong>
+                                                    <span class="text-muted">(<?= $mat['role'] === 'admin' ? 'Admin' : e($mat['telephone']) ?>)</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- MENTION EXPLICATIVE GUIDÉE -->
                     <div class="p-3 rounded-3 box-adaptive small border-start border-4 border-warning">
                         <div class="fw-bold text-primary mb-1">
                             <i class="bi bi-info-circle-fill me-1"></i>Règle automatique des 2 types de pénalités :
@@ -671,22 +738,42 @@ require_once __DIR__ . '/includes/navbar.php';
 document.addEventListener('DOMContentLoaded', function () {
     const inpMontant = document.getElementById('inputMontantCotisCycle');
     const inpPct     = document.getElementById('inputPctPenCycle');
+    const checks     = document.querySelectorAll('.js-check-membre-cycle');
+    const btnToggle  = document.getElementById('btnToggleTousMembres');
     if (!inpMontant || !inpPct) return;
 
-    function majApercuPenalite() {
+    function majApercuCycle() {
         const m   = parseFloat(inpMontant.value) || 0;
         const pct = parseFloat(inpPct.value) || 0;
         const p1  = Math.round((m * pct) / 100);
         const p2  = p1 * 2;
+
+        let nbCoches = 0;
+        checks.forEach(function (c) { if (c.checked) nbCoches++; });
+        const potTotal = Math.round(m * nbCoches);
+
+        document.getElementById('nbMembresCoches').textContent      = nbCoches;
+        document.getElementById('apercuPotCycle').textContent       = potTotal.toLocaleString('fr-FR') + ' FCFA';
         document.getElementById('apercuPctPartiel').textContent     = pct + ' %';
         document.getElementById('apercuMontantPartiel').textContent = p1.toLocaleString('fr-FR') + ' FCFA';
         document.getElementById('apercuPctDouble').textContent      = (pct * 2) + ' %';
         document.getElementById('apercuMontantDouble').textContent  = p2.toLocaleString('fr-FR') + ' FCFA';
         document.getElementById('apercuMajoration').textContent     = p1.toLocaleString('fr-FR') + ' FCFA';
     }
-    inpMontant.addEventListener('input', majApercuPenalite);
-    inpPct.addEventListener('input', majApercuPenalite);
-    majApercuPenalite();
+
+    inpMontant.addEventListener('input', majApercuCycle);
+    inpPct.addEventListener('input', majApercuCycle);
+    checks.forEach(function (c) { c.addEventListener('change', majApercuCycle); });
+
+    if (btnToggle) {
+        btnToggle.addEventListener('click', function () {
+            const tousCoches = Array.from(checks).every(function (c) { return c.checked; });
+            checks.forEach(function (c) { c.checked = !tousCoches; });
+            majApercuCycle();
+        });
+    }
+
+    majApercuCycle();
 });
 </script>
 <?php endif; ?>
