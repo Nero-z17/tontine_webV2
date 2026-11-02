@@ -927,54 +927,109 @@ require_once __DIR__ . '/includes/navbar.php';
         <?php if ($est_admin): ?>
         <div class="tab-pane fade <?= $onglet_actif === 'registre' ? 'show active' : '' ?>" id="tabRegistre">
             <div class="card card-djangui p-4">
-                <h5 class="fw-bold mb-3"><i class="bi bi-clipboard-data text-primary me-2"></i>Registre complet des cotisations — <?= e($cycle['titre'] ?? '') ?></h5>
-                <div class="table-responsive">
-                    <table class="table table-djangui align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th>Séance</th>
-                                <th>Membre cotisant</th>
-                                <th>Bouffeur</th>
-                                <th>Période</th>
-                                <th class="text-end">Versé / Attendu</th>
-                                <th class="text-end">Part Caisse</th>
-                                <th>Statut</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($toutes_cotisations as $tc): ?>
-                                <?php
-                                    $est_bf = ((int)$tc['cycle_member_id'] === (int)$tc['beneficiaire_cycle_member_id']);
-                                    $per_tc = formater_periode_seance($cycle['date_debut'], (int)$tc['numero_seance'], $cycle['frequence'], $tc['date_echeance']);
-                                ?>
+                <h5 class="fw-bold mb-3">
+                    <i class="bi bi-clipboard-data text-primary me-2"></i>Registre complet des cotisations — <?= e($cycle['titre'] ?? '') ?>
+                </h5>
+
+                <?php if (empty($toutes_cotisations)): ?>
+                    <div class="p-4 rounded-3 box-adaptive text-center text-muted">
+                        Aucune cotisation générée pour ce cycle.
+                    </div>
+                <?php else: ?>
+                    <?php
+                        // Palette de couleurs par séance + calcul des sous-totaux par séance
+                        $couleurs_reg = [
+                            1 => ['border' => '#2563eb', 'bg' => 'rgba(37, 99, 235, 0.10)',  'badge' => 'bg-primary'],
+                            2 => ['border' => '#10b981', 'bg' => 'rgba(16, 185, 129, 0.10)', 'badge' => 'bg-success'],
+                            3 => ['border' => '#f59e0b', 'bg' => 'rgba(245, 158, 11, 0.12)', 'badge' => 'bg-warning text-dark'],
+                            4 => ['border' => '#8b5cf6', 'bg' => 'rgba(139, 92, 246, 0.10)', 'badge' => 'bg-info text-dark'],
+                            5 => ['border' => '#ec4899', 'bg' => 'rgba(236, 72, 153, 0.10)', 'badge' => 'bg-danger'],
+                            6 => ['border' => '#06b6d4', 'bg' => 'rgba(6, 182, 212, 0.10)',  'badge' => 'bg-info text-dark'],
+                        ];
+                        $stats_reg_seance = [];
+                        foreach ($toutes_cotisations as $tc_calc) {
+                            $ns_r = (int)$tc_calc['numero_seance'];
+                            if (!isset($stats_reg_seance[$ns_r])) {
+                                $stats_reg_seance[$ns_r] = ['paye' => 0.0, 'attendu' => 0.0, 'bouffeur' => $tc_calc['ben_nom']];
+                            }
+                            $stats_reg_seance[$ns_r]['paye']    += (float)$tc_calc['montant_paye'];
+                            $stats_reg_seance[$ns_r]['attendu'] += (float)$tc_calc['montant_attendu'];
+                        }
+                    ?>
+                    <div class="table-responsive">
+                        <table class="table table-djangui align-middle mb-0">
+                            <thead>
                                 <tr>
-                                    <td class="fw-bold">#<?= (int)$tc['numero_seance'] ?></td>
-                                    <td>
-                                        <?= e($tc['mem_nom']) ?>
-                                        <?php if ($est_bf): ?><span class="badge bg-info-subtle text-info ms-1">Bouffeur</span><?php endif; ?>
-                                    </td>
-                                    <td class="small text-muted"><?= e($tc['ben_nom']) ?></td>
-                                    <td class="small"><?= e($per_tc) ?></td>
-                                    <td class="text-end fw-bold"><?= format_fcfa($tc['montant_paye']) ?> / <?= format_fcfa($tc['montant_attendu']) ?></td>
-                                    <td class="text-end text-warning"><?= format_fcfa($tc['part_caisse_reserve'] ?? 0) ?></td>
-                                    <td>
-                                        <?php if ($est_bf && $tc['statut'] === 'paye'): ?>
-                                            <span class="badge bg-info text-dark">Sur pot</span>
-                                        <?php elseif ($tc['statut'] === 'paye'): ?>
-                                            <span class="badge bg-success">Payé</span>
-                                        <?php elseif ($tc['statut'] === 'en_retard'): ?>
-                                            <span class="badge bg-danger">En retard</span>
-                                        <?php elseif ($tc['statut'] === 'partiel'): ?>
-                                            <span class="badge bg-warning text-dark">Partiel</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-secondary">En attente</span>
-                                        <?php endif; ?>
-                                    </td>
+                                    <th>Séance</th>
+                                    <th>Membre cotisant</th>
+                                    <th>Bouffeur</th>
+                                    <th>Période</th>
+                                    <th class="text-end">Versé / Attendu</th>
+                                    <th class="text-end">Part Caisse</th>
+                                    <th>Statut</th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
+                            </thead>
+                            <tbody>
+                                <?php
+                                $seance_reg_prec = null;
+                                foreach ($toutes_cotisations as $tc):
+                                    $ns_tc        = (int)$tc['numero_seance'];
+                                    $pal_reg      = $couleurs_reg[(($ns_tc - 1) % 6) + 1];
+                                    $nouv_s_reg   = ($seance_reg_prec !== $ns_tc);
+                                    $seance_reg_prec = $ns_tc;
+                                    $est_bf       = ((int)$tc['cycle_member_id'] === (int)$tc['beneficiaire_cycle_member_id']);
+                                    $per_tc       = formater_periode_seance($cycle['date_debut'], $ns_tc, $cycle['frequence'], $tc['date_echeance']);
+                                ?>
+                                    <?php if ($nouv_s_reg): ?>
+                                        <!-- BANDEAU ET TRAIT DE COULEUR SÉPARATEUR DE SÉANCE -->
+                                        <tr style="border-top: 3px solid <?= $pal_reg['border'] ?>; background: <?= $pal_reg['bg'] ?>;">
+                                            <td colspan="7" class="py-2 px-3">
+                                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                                    <div class="d-flex flex-wrap align-items-center gap-2">
+                                                        <span class="badge <?= $pal_reg['badge'] ?> rounded-pill px-3 py-1">
+                                                            SÉANCE #<?= $ns_tc ?>
+                                                        </span>
+                                                        <span class="small fw-bold" style="color: <?= $pal_reg['border'] ?>;">
+                                                            <?= e($per_tc) ?> — Bouffeur : <?= e($stats_reg_seance[$ns_tc]['bouffeur']) ?>
+                                                        </span>
+                                                    </div>
+                                                    <span class="small fw-bold" style="color: <?= $pal_reg['border'] ?>;">
+                                                        Collecté : <?= format_fcfa($stats_reg_seance[$ns_tc]['paye']) ?> / <?= format_fcfa($stats_reg_seance[$ns_tc]['attendu']) ?>
+                                                    </span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endif; ?>
+
+                                    <tr style="border-left: 4px solid <?= $pal_reg['border'] ?>;">
+                                        <td class="fw-bold" style="color: <?= $pal_reg['border'] ?>;">#<?= $ns_tc ?></td>
+                                        <td>
+                                            <?= e($tc['mem_nom']) ?>
+                                            <?php if ($est_bf): ?><span class="badge bg-info-subtle text-info ms-1">Bouffeur</span><?php endif; ?>
+                                        </td>
+                                        <td class="small text-muted"><?= e($tc['ben_nom']) ?></td>
+                                        <td class="small"><?= e($per_tc) ?></td>
+                                        <td class="text-end fw-bold"><?= format_fcfa($tc['montant_paye']) ?> / <?= format_fcfa($tc['montant_attendu']) ?></td>
+                                        <td class="text-end text-warning"><?= format_fcfa($tc['part_caisse_reserve'] ?? 0) ?></td>
+                                        <td>
+                                            <?php if ($est_bf && $tc['statut'] === 'paye'): ?>
+                                                <span class="badge bg-info text-dark">Sur pot</span>
+                                            <?php elseif ($tc['statut'] === 'paye'): ?>
+                                                <span class="badge bg-success">Payé</span>
+                                            <?php elseif ($tc['statut'] === 'en_retard'): ?>
+                                                <span class="badge bg-danger">En retard</span>
+                                            <?php elseif ($tc['statut'] === 'partiel'): ?>
+                                                <span class="badge bg-warning text-dark">Partiel</span>
+                                            <?php else: ?>
+                                                <span class="badge bg-secondary">En attente</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         <?php endif; ?>

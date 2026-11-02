@@ -173,10 +173,63 @@ body {
     z-index: 1020;
 }
 
+/* Barre de navigation publique (quand on n'est pas connecté) : fond opaque + flou au scroll */
+.navbar-public,
 .navbar-djangui {
-    background: var(--dj-bg-surface);
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border-bottom: 1px solid var(--dj-border);
     box-shadow: var(--dj-shadow);
+    transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+[data-theme="dark"] .navbar-public,
+[data-theme="dark"] .navbar-djangui {
+    background: rgba(11, 17, 32, 0.95);
+    border-bottom: 1px solid rgba(59, 130, 246, 0.22);
+}
+
+.navbar-public .navbar-brand {
+    color: var(--dj-text-main) !important;
+}
+
+/* ============================================================================
+   HERO VIDÉO EN BOUCLE SUR LA PAGE D'ACCUEIL (index.php)
+   ============================================================================ */
+.hero-video-section {
+    position: relative;
+    min-height: 82vh;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    background: var(--dj-hero-grad);
+    color: #ffffff;
+    padding: 4.5rem 0;
+}
+
+.hero-video-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* Voile dégradé par-dessus la vidéo pour que le texte reste 100 % lisible */
+.hero-video-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(125deg, rgba(7, 11, 25, 0.86) 0%, rgba(15, 23, 42, 0.76) 55%, rgba(6, 78, 59, 0.72) 100%);
+    backdrop-filter: blur(2px);
+    z-index: 2;
+}
+
+.hero-video-content {
+    position: relative;
+    z-index: 3;
 }
 
 /* ============================================================================

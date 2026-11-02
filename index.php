@@ -13,19 +13,28 @@ require_once __DIR__ . '/includes/header.php';
 require_once __DIR__ . '/includes/navbar.php';
 ?>
 
-<!-- HERO BANNER MODERNE -->
-<section class="page-header-dark py-5 mb-4">
-    <div class="container py-3">
+<!-- HERO BANNER AVEC VIDÉO EN BOUCLE EN ARRIÈRE-PLAN -->
+<section class="hero-video-section mb-4">
+    <!-- Vidéo muette en lecture automatique et en boucle infinie -->
+    <video class="hero-video-bg" autoplay muted loop playsinline>
+        <source src="<?= BASE_URL ?>/assets/videos/hero.mp4" type="video/mp4">
+    </video>
+
+    <!-- Voile sombre élégant pour faire ressortir le texte et la carte -->
+    <div class="hero-video-overlay"></div>
+
+    <!-- Contenu au premier plan -->
+    <div class="container hero-video-content py-3">
         <div class="row align-items-center g-4">
             <div class="col-lg-7">
-                <span class="badge bg-success px-3 py-2 rounded-pill fw-semibold mb-3">
+                <span class="badge bg-success px-3 py-2 rounded-pill fw-semibold mb-3 shadow-sm">
                     <i class="bi bi-shield-check me-1"></i>FINTECH COMMUNAUTAIRE — CAMEROUN (FCFA)
                 </span>
-                <h1 class="display-5 fw-bold mb-3">
+                <h1 class="display-5 fw-bold text-white mb-3">
                     Gérez votre tontine en toute transparence, sans cahier perdu ni calcul manuel.
                 </h1>
                 <p class="lead text-white-50 mb-4">
-                    Tirage au sort aléatoire verrouillé, suivi en direct du pot du bouffeur de la séance, gestion automatique des retards sur pot et caisse de réserve commune.
+                    Tirage au sort aléatoire verrouillé, suivi en direct du pot du bouffeur de la séance, gestion automatique des retards sur pot et caisse de réserve par cycle.
                 </p>
                 <div class="d-flex flex-wrap gap-3">
                     <a href="<?= BASE_URL ?>/register-tontine.php" class="btn btn-glow-emerald btn-lg px-4">
@@ -37,7 +46,7 @@ require_once __DIR__ . '/includes/navbar.php';
                 </div>
             </div>
             <div class="col-lg-5">
-                <div class="card card-djangui p-4 text-dark">
+                <div class="card card-djangui p-4 shadow-lg">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <span class="badge bg-primary rounded-pill px-3 py-2">Aperçu Séance en Direct</span>
                         <span class="small fw-bold text-success">MTN MoMo & Orange Money</span>
