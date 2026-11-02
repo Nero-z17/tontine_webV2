@@ -1,0 +1,426 @@
+/* ============================================================================
+   DJANGUI FINTECH UI — DESIGN SYSTEM BI-THÈME (CLAIR LUMINEUX & SOMBRE NUIT)
+   Architecture App Moderne : Sidebar PC + Topbar + Bottom Nav Mobile
+   ============================================================================ */
+
+:root,
+[data-theme="light"] {
+    --dj-bg-body: #f4f7fb;
+    --dj-bg-surface: #ffffff;
+    --dj-bg-subtle: #edf2f9;
+    --dj-bg-sidebar: #0f172a;
+    --dj-text-main: #0f172a;
+    --dj-text-muted: #64748b;
+    --dj-border: #e2e8f0;
+    --dj-primary: #2563eb;
+    --dj-primary-hover: #1d4ed8;
+    --dj-emerald: #10b981;
+    --dj-emerald-hover: #059669;
+    --dj-warning: #f59e0b;
+    --dj-danger: #ef4444;
+    --dj-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06);
+    --dj-shadow-hover: 0 10px 25px -4px rgba(37, 99, 235, 0.12);
+    --dj-accent-grad: linear-gradient(135deg, #eff6ff 0%, #ecfdf5 100%);
+    --dj-hero-grad: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #065f46 100%);
+}
+
+[data-theme="dark"] {
+    --dj-bg-body: #070b19;
+    --dj-bg-surface: #111827;
+    --dj-bg-subtle: #1e293b;
+    --dj-bg-sidebar: #0b1120;
+    --dj-text-main: #f8fafc;
+    --dj-text-muted: #94a3b8;
+    --dj-border: #1f2937;
+    --dj-primary: #3b82f6;
+    --dj-primary-hover: #60a5fa;
+    --dj-emerald: #10b981;
+    --dj-emerald-hover: #34d399;
+    --dj-warning: #fbbf24;
+    --dj-danger: #f87171;
+    --dj-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+    --dj-shadow-hover: 0 10px 25px -4px rgba(59, 130, 246, 0.22);
+    --dj-accent-grad: linear-gradient(135deg, rgba(30, 58, 138, 0.35) 0%, rgba(6, 95, 70, 0.35) 100%);
+    --dj-hero-grad: linear-gradient(135deg, #030712 0%, #0f172a 60%, #064e3b 100%);
+}
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--dj-bg-body);
+    color: var(--dj-text-main);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+}
+
+/* ============================================================================
+   LAYOUT APPLICATION CONNECTÉE (SIDEBAR GAUCHE PC + CONTENU PRINCIPAL)
+   ============================================================================ */
+.app-shell {
+    display: flex;
+    min-height: 100vh;
+    width: 100%;
+}
+
+.app-sidebar {
+    width: 260px;
+    background: var(--dj-bg-sidebar);
+    color: #f8fafc;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1030;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 1.25rem 1rem;
+}
+
+.app-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+@media (min-width: 992px) {
+    .app-main--with-sidebar {
+        margin-left: 260px;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .app-sidebar {
+        display: none !important;
+    }
+    body {
+        padding-bottom: 74px;
+    }
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: #ffffff;
+    text-decoration: none;
+    font-weight: 800;
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.sidebar-brand-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #3b82f6, #10b981);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-size: 1.2rem;
+}
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    flex: 1;
+}
+
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    color: #94a3b8;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.92rem;
+    transition: all 0.2s ease;
+}
+
+.sidebar-link i {
+    font-size: 1.15rem;
+}
+
+.sidebar-link:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-link.active {
+    color: #ffffff;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+
+/* ============================================================================
+   TOPBAR COMPACTE D'APPLICATION
+   ============================================================================ */
+.app-topbar {
+    background: var(--dj-bg-surface);
+    border-bottom: 1px solid var(--dj-border);
+    padding: 0.75rem 1.25rem;
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+}
+
+.navbar-djangui {
+    background: var(--dj-bg-surface);
+    border-bottom: 1px solid var(--dj-border);
+    box-shadow: var(--dj-shadow);
+}
+
+/* ============================================================================
+   STEPPER DE PARCOURS GUIDÉ (4 ÉTAPES)
+   ============================================================================ */
+.stepper-djangui {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+}
+
+@media (max-width: 767.98px) {
+    .stepper-djangui {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+.step-item {
+    background: var(--dj-bg-surface);
+    border: 1px solid var(--dj-border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    transition: all 0.2s ease;
+}
+
+.step-item.step-done {
+    border-color: rgba(16, 185, 129, 0.4);
+    background: rgba(16, 185, 129, 0.05);
+}
+
+.step-item.step-active {
+    border: 2px solid var(--dj-primary);
+    box-shadow: var(--dj-shadow-hover);
+}
+
+.step-circle {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+    background: var(--dj-bg-subtle);
+    color: var(--dj-text-muted);
+}
+
+.step-done .step-circle {
+    background: var(--dj-emerald);
+    color: #ffffff;
+}
+
+.step-active .step-circle {
+    background: var(--dj-primary);
+    color: #ffffff;
+}
+
+/* ============================================================================
+   CARTES, BOUTONS, ONGLETS & COMPOSANTS FINTECH
+   ============================================================================ */
+.card-djangui {
+    background: var(--dj-bg-surface);
+    border: 1px solid var(--dj-border);
+    border-radius: 16px;
+    box-shadow: var(--dj-shadow);
+    color: var(--dj-text-main);
+}
+
+.card-accent-djangui {
+    background: var(--dj-accent-grad);
+    border: 1px solid rgba(37, 99, 235, 0.22);
+    border-radius: 16px;
+    box-shadow: var(--dj-shadow);
+    color: var(--dj-text-main);
+}
+
+.hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--dj-shadow-hover);
+}
+
+.box-adaptive {
+    background-color: var(--dj-bg-subtle);
+    border: 1px solid var(--dj-border);
+    color: var(--dj-text-main);
+}
+
+.border-left-navy    { border-left: 5px solid var(--dj-primary) !important; }
+.border-left-emerald { border-left: 5px solid var(--dj-emerald) !important; }
+.border-left-warning { border-left: 5px solid var(--dj-warning) !important; }
+.border-left-danger  { border-left: 5px solid var(--dj-danger) !important; }
+
+.btn-glow-blue {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #ffffff !important;
+    border: none;
+    border-radius: 10px;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+    transition: all 0.2s ease;
+}
+
+.btn-glow-blue:hover {
+    background: linear-gradient(135deg, #1d4ed8, #1e40af);
+    transform: translateY(-1px);
+}
+
+.btn-glow-emerald {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #ffffff !important;
+    border: none;
+    border-radius: 10px;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28);
+    transition: all 0.2s ease;
+}
+
+.btn-glow-emerald:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+    transform: translateY(-1px);
+}
+
+.btn-theme-toggle {
+    background: var(--dj-bg-subtle);
+    color: var(--dj-text-main);
+    border: 1px solid var(--dj-border);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+/* Onglets modernes type Pilules FinTech */
+.nav-pills-djangui {
+    background: var(--dj-bg-subtle);
+    padding: 0.35rem;
+    border-radius: 12px;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    border: 1px solid var(--dj-border);
+}
+
+.nav-pills-djangui .nav-link {
+    border-radius: 9px;
+    color: var(--dj-text-muted);
+    font-weight: 600;
+    font-size: 0.88rem;
+    padding: 0.5rem 1rem;
+}
+
+.nav-pills-djangui .nav-link.active {
+    background: var(--dj-bg-surface);
+    color: var(--dj-primary);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.table-djangui thead th {
+    background-color: var(--dj-bg-subtle);
+    color: var(--dj-text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+    border-bottom: 1px solid var(--dj-border);
+    padding: 0.85rem 0.75rem;
+}
+
+.table-djangui tbody td {
+    padding: 0.9rem 0.75rem;
+    border-bottom: 1px solid var(--dj-border);
+}
+
+/* ============================================================================
+   BARRE MOBILE FIXE EN BAS (4 ONGLETS D'APPLICATION)
+   ============================================================================ */
+.mobile-bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 66px;
+    background: var(--dj-bg-surface);
+    border-top: 1px solid var(--dj-border);
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    z-index: 1040;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.mobile-bottom-nav a {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    color: var(--dj-text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    gap: 2px;
+    padding: 0.35rem 0;
+}
+
+.mobile-bottom-nav a i {
+    font-size: 1.25rem;
+}
+
+.mobile-bottom-nav a.active {
+    color: var(--dj-primary);
+}
+
+/* ============================================================================
+   HERO PUBLIC & BANDEAUX COMPACTS
+   ============================================================================ */
+.hero-djangui {
+    background: var(--dj-hero-grad);
+    color: #ffffff;
+    padding: 4.5rem 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.page-header-dark {
+    background: var(--dj-hero-grad);
+    color: #ffffff;
+    padding: 2rem 0;
+    margin-bottom: 1.75rem;
+}
+
+.footer-djangui {
+    background: var(--dj-bg-surface);
+    border-top: 1px solid var(--dj-border);
+}
