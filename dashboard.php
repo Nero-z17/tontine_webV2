@@ -296,9 +296,11 @@ require_once __DIR__ . '/includes/navbar.php';
             <div class="col-lg-7">
                 <div class="card-accent-djangui hover-lift h-100 p-4">
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-                        <span class="badge bg-primary px-3 py-2 rounded-pill">
-                            <i class="bi bi-trophy-fill text-warning me-1"></i>POT DE LA TONTINE ACTUELLE — SÉANCE #<?= $seance_max_ouverte ?>
-                        </span>
+                        <div class="text-center">
+                            <span class="badge bg-primary px-3 py-2 rounded-4 text-wrap text-center lh-base" style="text-wrap: balance;">
+                                <i class="bi bi-trophy-fill text-warning me-1"></i>POT DE LA TONTINE ACTUELLE — SÉANCE #<?= $seance_max_ouverte ?>
+                            </span>
+                        </div>
                         <span class="small fw-semibold text-primary">
                             <i class="bi bi-calendar3 me-1"></i><?= e($periode_act) ?>
                         </span>

@@ -43,8 +43,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
         $dt_debut = DateTime::createFromFormat('!Y-m-d', $date_debut);
         $dt_fin   = ($date_fin !== '') ? DateTime::createFromFormat('!Y-m-d', $date_fin) : null;
 
+        // verifier si ce nom de cycle exste deja 
+        $stmDoublon = $pdo->prepare("SELECT COUNT(*) FROM cycles WHERE tontine_id = ? AND titre = ?");
+        $stmDoublon->execute([$tontine_id, $titre]);
+        $titre_existe = ((int)$stmDoublon->fetchColumn() > 0);
+
         if ($titre === '' || $montant_cotisation <= 0 || !$dt_debut) {
             message_flash('danger', 'Veuillez renseigner un titre, un montant de cotisation valide et une date de début.');
+        } elseif ($titre_existe) {
+            message_flash('danger', "Un cycle nommé « {$titre} » existe déjà dans votre tontine. Choississez un autre nom de titre.");
         } elseif (count($membres_retenus) < 2) {
             message_flash('danger', 'Veuillez sélectionner au moins 2 membres participants pour créer un cycle.');
         } elseif ($pourcentage_penalite < 0 || $pourcentage_penalite > 50) {
