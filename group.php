@@ -670,7 +670,7 @@ require_once __DIR__ . '/includes/navbar.php';
                         </p>
 
                         <?php if (empty($candidats_passation)): ?>
-                            <div class="alert alert-light border small mb-0">
+                            <div class="p-3 rounded-3 box-adaptive small mb-0">
                                 Aucun autre membre actif n'est disponible pour recevoir l'administration.
                             </div>
                         <?php else: ?>

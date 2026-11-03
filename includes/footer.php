@@ -28,7 +28,7 @@ $au_plancher  = ($date_sim_iso <= $date_min_iso);
                             <span class="text-muted">(<?= $jours_ecart > 0 ? '+' . $jours_ecart : $jours_ecart ?>j)</span>
                         <?php endif; ?>
                     </span>
-                    <span class="badge bg-light text-muted border">Min : <?= e($date_min_str) ?></span>
+                    <span class="badge box-adaptive">Min : <?= e($date_min_str) ?></span>
                 </div>
 
                 <form method="POST" class="d-flex flex-wrap justify-content-center align-items-center gap-1 m-0">
