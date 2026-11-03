@@ -61,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
     $action = $_POST['action'] ?? '';
 
     // ACTION A : Payer une cotisation avec choix du montant exact
-    if ($action === 'payer_cotisation' && $cycle_est_actif && $mon_cycle_member) {
+    if ($action === 'payer_cotisation' && $cycle && $mon_cycle_member) {
         $contribution_id = (int)($_POST['contribution_id'] ?? 0);
         $mode_paiement   = trim($_POST['mode_paiement'] ?? '');
         $montant_saisi   = filter_var($_POST['montant_saisi'] ?? null, FILTER_VALIDATE_FLOAT);
@@ -653,7 +653,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                     $periode_label   = formater_periode_seance($cycle['date_debut'], $num_s, $cycle['frequence'], $s['date_echeance']);
                                     $max_payable     = round($reste_seance + $cumul_dettes_ant + $mes_penalites_dues, 2);
                                 ?>
-                                <tr class="<?= $est_mon_tour ? 'table-primary bg-opacity-10' : '' ?>">
+                                <tr class="<?= $est_mon_tour ? 'row-highlight-djangui' : '' ?>">
                                     <td class="fw-bold">
                                         #<?= $num_s ?>
                                         <?php if ($est_mon_tour): ?>
@@ -690,7 +690,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                     <td class="text-end">
                                         <?php if ($deja_paye || $est_mon_tour): ?>
                                             <span class="text-success small fw-bold"><i class="bi bi-check2-all"></i> À jour</span>
-                                        <?php elseif (!$cycle_est_actif || $est_verrouillee): ?>
+                                        <?php elseif ($est_verrouillee): ?>
                                             <button type="button" class="btn btn-sm btn-outline-secondary" disabled>
                                                 <i class="bi bi-lock-fill me-1"></i>Séance fermée
                                             </button>

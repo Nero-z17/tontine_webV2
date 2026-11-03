@@ -219,7 +219,7 @@ require_once __DIR__ . '/includes/navbar.php';
         <a href="<?= BASE_URL ?>/group.php" class="step-item text-decoration-none <?= $etape_courante > 1 ? 'step-done' : 'step-active' ?>">
             <span class="step-circle"><?= $etape_courante > 1 ? '<i class="bi bi-check-lg"></i>' : '1' ?></span>
             <div>
-                <div class="small fw-bold text-dark">1. Membres du groupe</div>
+                <div class="small fw-bold text-adaptive">1. Membres du groupe</div>
                 <div class="text-muted" style="font-size: 0.76rem;"><?= $nb_membres_actifs ?> membre(s) actif(s)</div>
             </div>
         </a>
@@ -227,7 +227,7 @@ require_once __DIR__ . '/includes/navbar.php';
         <a href="<?= BASE_URL ?>/cycles.php" class="step-item text-decoration-none <?= $etape_courante > 2 ? 'step-done' : ($etape_courante === 2 ? 'step-active' : '') ?>">
             <span class="step-circle"><?= $etape_courante > 2 ? '<i class="bi bi-check-lg"></i>' : '2' ?></span>
             <div>
-                <div class="small fw-bold text-dark">2. Cycle de cotisation</div>
+                <div class="small fw-bold text-adaptive">2. Cycle de cotisation</div>
                 <div class="text-muted" style="font-size: 0.76rem;"><?= $cycle ? e($cycle['titre']) : 'À créer / activer' ?></div>
             </div>
         </a>
@@ -235,7 +235,7 @@ require_once __DIR__ . '/includes/navbar.php';
         <a href="<?= BASE_URL ?>/cycles.php" class="step-item text-decoration-none <?= $etape_courante > 3 ? 'step-done' : ($etape_courante === 3 ? 'step-active' : '') ?>">
             <span class="step-circle"><?= $etape_courante > 3 ? '<i class="bi bi-check-lg"></i>' : '3' ?></span>
             <div>
-                <div class="small fw-bold text-dark">3. Tirage au sort</div>
+                <div class="small fw-bold text-adaptive">3. Tirage au sort</div>
                 <div class="text-muted" style="font-size: 0.76rem;"><?= ($cycle && (int)$cycle['tirage_verrouille'] === 1) ? 'Ordre verrouillé' : 'En attente du tirage' ?></div>
             </div>
         </a>
@@ -243,7 +243,7 @@ require_once __DIR__ . '/includes/navbar.php';
         <a href="<?= BASE_URL ?>/finances.php" class="step-item text-decoration-none <?= $etape_courante === 4 ? 'step-active' : '' ?>">
             <span class="step-circle">4</span>
             <div>
-                <div class="small fw-bold text-dark">4. Séance en cours</div>
+                <div class="small fw-bold text-adaptive">4. Séance en cours</div>
                 <div class="text-muted" style="font-size: 0.76rem;"><?= $pot_seance_actuelle ? 'Séance #' . $seance_max_ouverte . ' ouverte' : 'En attente' ?></div>
             </div>
         </a>

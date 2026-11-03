@@ -93,16 +93,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
         exit;
     }
 
-    // ACTION B : Activer un cycle brouillon (en conservant les membres choisis à la création)
+    // ACTION B : Activer un cycle brouillon
+    // Règle métier : Si les séances du cycle actif précédent sont toutes terminées (date de la dernière séance passée),
+    // on peut activer un nouveau cycle même s'il reste des dettes ou des pénalités à régler sur le cycle précédent !
     if ($action === 'activer_cycle') {
         $cycle_id = (int)($_POST['cycle_id'] ?? 0);
 
-        $stmtCheckActif = $pdo->prepare("SELECT COUNT(*) FROM cycles WHERE tontine_id = ? AND statut = 'actif'");
-        $stmtCheckActif->execute([$tontine_id]);
-        if ((int)$stmtCheckActif->fetchColumn() > 0) {
-            message_flash('warning', 'Un cycle est déjà actif. Il se clôturera automatiquement dès que la dernière séance sera passée et que toutes les pénalités seront réglées.');
+        $stmtActifs = $pdo->prepare("SELECT id, titre, tirage_verrouille FROM cycles WHERE tontine_id = ? AND statut = 'actif'");
+        $stmtActifs->execute([$tontine_id]);
+        $cycles_actifs_existants = $stmtActifs->fetchAll();
+
+        $cycle_bloquant = null;
+        $cycles_echus_a_basculer = [];
+
+        foreach ($cycles_actifs_existants as $cae) {
+            if ((int)$cae['tirage_verrouille'] === 0) {
+                $cycle_bloquant = $cae['titre'];
+                break;
+            }
+            $stmtMaxEch = $pdo->prepare("
+                SELECT MAX(co.date_echeance)
+                FROM contributions co
+                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                WHERE cm.cycle_id = ?
+            ");
+            $stmtMaxEch->execute([(int)$cae['id']]);
+            $derniere_ech_cae = $stmtMaxEch->fetchColumn();
+
+            // Si la dernière séance du cycle actif n'est pas encore passée, il est toujours en cours de séances
+            if (!$derniere_ech_cae || strtotime($derniere_ech_cae) >= strtotime(date_actuelle('Y-m-d'))) {
+                $cycle_bloquant = $cae['titre'];
+                break;
+            } else {
+                // Les séances de cet ancien cycle sont terminées : il ne bloque pas le nouveau cycle !
+                $cycles_echus_a_basculer[] = (int)$cae['id'];
+            }
+        }
+
+        if ($cycle_bloquant !== null) {
+            message_flash('warning', "Le cycle « {$cycle_bloquant} » a encore des séances en cours. Attendez la fin de sa dernière séance ou utilisez le bouton « Arrêter le cycle » avant d'en activer un nouveau.");
             header('Location: ' . BASE_URL . '/cycles.php');
             exit;
+        }
+
+        // Clôturer le statut des anciens cycles dont toutes les séances sont passées (leurs dettes et pénalités restent réglables dans Cotisations & Caisse)
+        foreach ($cycles_echus_a_basculer as $id_echu) {
+            $pdo->prepare("UPDATE cycles SET statut = 'termine' WHERE id = ? AND tontine_id = ?")
+                ->execute([$id_echu, $tontine_id]);
         }
 
         $stmtC = $pdo->prepare("SELECT * FROM cycles WHERE id = ? AND tontine_id = ? AND statut = 'brouillon' LIMIT 1");
@@ -147,6 +184,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
             message_flash('info', 'Le cycle brouillon a été supprimé.');
         }
         header('Location: ' . BASE_URL . '/cycles.php');
+        exit;
+    }
+
+    // ACTION C-BIS : Arrêter / Clôturer manuellement un cycle actif
+    if ($action === 'arreter_cycle') {
+        $cycle_id = (int)($_POST['cycle_id'] ?? 0);
+        $stmtStop = $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = CURDATE() WHERE id = ? AND tontine_id = ? AND statut = 'actif'");
+        $stmtStop->execute([$cycle_id, $tontine_id]);
+        if ($stmtStop->rowCount() > 0) {
+            message_flash('warning', 'Le cycle a été arrêté et clôturé. Vous pouvez désormais activer un nouveau cycle (les éventuels impayés ou pénalités restent réglables dans l\'onglet Cotisations & Caisse).');
+        }
+        header('Location: ' . BASE_URL . '/cycles.php?cycle_id=' . $cycle_id);
         exit;
     }
 
@@ -334,6 +383,17 @@ require_once __DIR__ . '/includes/navbar.php';
             <button type="button" onclick="window.print()" class="btn btn-sm btn-outline-secondary">
                 <i class="bi bi-printer me-1"></i>Imprimer
             </button>
+
+            <?php if ($est_admin && $cycle_choisi && $cycle_choisi['statut'] === 'actif'): ?>
+                <form method="POST" action="cycles.php" class="d-inline m-0" onsubmit="return confirm('Voulez-vous vraiment arrêter et clôturer ce cycle maintenant ?');">
+                    <?= champ_csrf() ?>
+                    <input type="hidden" name="action" value="arreter_cycle">
+                    <input type="hidden" name="cycle_id" value="<?= (int)$cycle_choisi['id'] ?>">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">
+                        <i class="bi bi-stop-circle me-1"></i>Arrêter ce cycle
+                    </button>
+                </form>
+            <?php endif; ?>
 
             <?php if ($est_admin): ?>
                 <button type="button" class="btn btn-sm btn-glow-emerald" data-bs-toggle="modal" data-bs-target="#modalNouveauCycle">
@@ -529,7 +589,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                     $est_fermee = ($cycle_choisi['statut'] === 'actif' && $num_s > $seance_max_ouverte);
                                     $pot_ok     = ((int)$sb['pot_totalement_recu'] === 1 || (float)$sb['montant_pot_recu'] >= (float)$sb['montant_pot_attendu']);
                                 ?>
-                                <tr class="<?= $est_act ? 'table-primary bg-opacity-10' : '' ?>">
+                                <tr class="<?= $est_act ? 'row-highlight-djangui' : '' ?>">
                                     <td class="fw-bold">
                                         #<?= $num_s ?>
                                         <?php if ($est_act): ?>
@@ -590,7 +650,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                         <div class="row g-2">
                                             <?php foreach ($cotisants_par_seance[$num_s] ?? [] as $dc): ?>
                                                 <div class="col-md-4 col-lg-3">
-                                                    <div class="p-2 rounded-3 bg-body border d-flex justify-content-between align-items-center small">
+                                                    <div class="p-2 rounded-3 surface-chip-djangui d-flex justify-content-between align-items-center small">
                                                         <div class="text-truncate me-2">
                                                             <div class="fw-semibold text-truncate"><?= e($dc['nom_complet']) ?></div>
                                                             <div class="text-muted" style="font-size:0.72rem;"><?= format_fcfa($dc['montant_paye']) ?> / <?= format_fcfa($dc['montant_attendu']) ?></div>
@@ -616,7 +676,7 @@ require_once __DIR__ . '/includes/navbar.php';
                             <?php endforeach; ?>
                         </tbody>
                         <?php if ($est_admin): ?>
-                        <tfoot class="table-light fw-bold">
+                        <tfoot class="tfoot-djangui fw-bold">
                             <tr>
                                 <td colspan="3">TOTAL DU CYCLE</td>
                                 <td class="text-end text-success"><?= format_fcfa($total_collecte_cycle) ?> / <?= format_fcfa($total_attendu_cycle) ?></td>
@@ -694,7 +754,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                 <div class="row g-2">
                                     <?php foreach ($membres_actifs_tontine as $mat): ?>
                                         <div class="col-md-6">
-                                            <label class="form-check p-2 ps-4 rounded-2 bg-body border d-flex align-items-center gap-2 small w-100 m-0" style="cursor: pointer;">
+                                            <label class="form-check p-2 ps-4 rounded-2 surface-chip-djangui d-flex align-items-center gap-2 small w-100 m-0" style="cursor: pointer;">
                                                 <input class="form-check-input js-check-membre-cycle m-0" type="checkbox" name="membres_choisis[]" value="<?= (int)$mat['id'] ?>" checked>
                                                 <span class="text-truncate">
                                                     <strong><?= e($mat['nom_complet']) ?></strong>

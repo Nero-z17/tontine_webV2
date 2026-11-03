@@ -63,7 +63,7 @@ if ($est_connecte && isset($pdo) && $pdo instanceof PDO && $tontine_id_nav > 0) 
         FROM contributions co
         INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
         INNER JOIN cycles c ON c.id = cm.cycle_id
-        WHERE cm.user_id = ? AND c.tontine_id = ? AND c.statut = 'actif'
+        WHERE cm.user_id = ? AND c.tontine_id = ? AND c.statut IN ('actif', 'termine')
           AND co.cycle_member_id != co.beneficiaire_cycle_member_id
           AND co.montant_paye < co.montant_attendu
           AND co.date_echeance < CURDATE()
@@ -144,13 +144,13 @@ if ($est_connecte && isset($pdo) && $pdo instanceof PDO && $tontine_id_nav > 0) 
                 <span class="sidebar-brand-icon"><i class="bi bi-safe2-fill"></i></span>
                 <div>
                     <div>DJANGUI</div>
-                    <small class="d-block text-white-50 fw-normal" style="font-size: 0.7rem;">Gestion de Tontine</small>
+                    <small class="sidebar-brand-sub">Gestion de Tontine</small>
                 </div>
             </a>
 
-            <div class="p-3 rounded-3 mb-3" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);">
-                <div class="small text-white-50 text-uppercase fw-bold" style="font-size: 0.68rem;">Tontine active</div>
-                <div class="fw-bold text-white text-truncate mb-1"><?= e($nom_tontine_top) ?></div>
+            <div class="sidebar-profile-card">
+                <div class="sidebar-profile-label">Tontine active</div>
+                <div class="sidebar-profile-title text-truncate mb-1"><?= e($nom_tontine_top) ?></div>
                 <span class="badge <?= $est_admin ? 'bg-warning text-dark' : 'bg-success' ?> rounded-pill">
                     <i class="bi <?= $est_admin ? 'bi-shield-check' : 'bi-person-check' ?> me-1"></i>
                     <?= $est_admin ? 'Secrétaire & Cotisant' : 'Membre Cotisant' ?>
@@ -183,7 +183,7 @@ if ($est_connecte && isset($pdo) && $pdo instanceof PDO && $tontine_id_nav > 0) 
                 </a>
             </nav>
 
-            <div class="pt-3 mt-auto border-top border-secondary border-opacity-25 d-flex flex-column gap-2">
+            <div class="sidebar-footer d-flex flex-column gap-2">
                 <button type="button" class="btn-theme-toggle js-theme-toggle w-100 justify-content-center">
                     <i class="bi bi-moon-stars-fill js-theme-icon"></i>
                     <span class="js-theme-label">Mode Sombre</span>

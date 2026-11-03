@@ -1,61 +1,108 @@
 /* ============================================================================
-   DJANGUI FINTECH UI — DESIGN SYSTEM BI-THÈME (CLAIR LUMINEUX & SOMBRE NUIT)
-   Architecture App Moderne : Sidebar PC + Topbar + Bottom Nav Mobile
+   DJANGUI FINTECH UI — DESIGN SYSTEM BI-THÈME (CLAIR APAISANT & SOMBRE PROFOND)
+   Conçu pour être professionnel, attrayant, doux pour les yeux et 100 % lisible
    ============================================================================ */
 
 :root,
 [data-theme="light"] {
-    --dj-bg-body: #f4f7fb;
+    --dj-bg-body: #f1f5f9;
+    --dj-bg-body-grad: linear-gradient(180deg, #edf3fb 0%, #f4f7fb 55%, #eff8f5 100%);
     --dj-bg-surface: #ffffff;
-    --dj-bg-subtle: #edf2f9;
-    --dj-bg-sidebar: #0f172a;
+    --dj-bg-subtle: #e8eff8;
+    --dj-bg-input: #f8fafc;
+    --dj-bg-sidebar: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    --dj-sidebar-text: #1e293b;
+    --dj-sidebar-muted: #64748b;
+    --dj-sidebar-border: #e2e8f0;
+    --dj-sidebar-card: #f1f5f9;
+    --dj-sidebar-hover: rgba(37, 99, 235, 0.08);
     --dj-text-main: #0f172a;
-    --dj-text-muted: #64748b;
-    --dj-border: #e2e8f0;
+    --dj-text-muted: #52637a;
+    --dj-border: #dbe3ee;
     --dj-primary: #2563eb;
     --dj-primary-hover: #1d4ed8;
-    --dj-emerald: #10b981;
-    --dj-emerald-hover: #059669;
-    --dj-warning: #f59e0b;
-    --dj-danger: #ef4444;
-    --dj-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06);
-    --dj-shadow-hover: 0 10px 25px -4px rgba(37, 99, 235, 0.12);
-    --dj-accent-grad: linear-gradient(135deg, #eff6ff 0%, #ecfdf5 100%);
+    --dj-emerald: #059669;
+    --dj-emerald-hover: #047857;
+    --dj-warning: #d97706;
+    --dj-danger: #dc2626;
+    --dj-shadow: 0 4px 18px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+    --dj-shadow-hover: 0 12px 26px -4px rgba(37, 99, 235, 0.13);
+    --dj-accent-grad: linear-gradient(135deg, #e6f0ff 0%, #f0f7ff 50%, #e6faef 100%);
+    --dj-accent-border: rgba(37, 99, 235, 0.24);
+    --dj-header-grad: linear-gradient(135deg, #e0edff 0%, #eef5ff 50%, #dff7ec 100%);
+    --dj-header-text: #0f172a;
+    --dj-header-muted: #475569;
     --dj-hero-grad: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #065f46 100%);
+    --dj-row-highlight: rgba(37, 99, 235, 0.07);
+    --dj-row-hover: rgba(37, 99, 235, 0.035);
 }
 
 [data-theme="dark"] {
-    --dj-bg-body: #070b19;
-    --dj-bg-surface: #111827;
+    --dj-bg-body: #0b1120;
+    --dj-bg-body-grad: linear-gradient(180deg, #090e1a 0%, #0f172a 60%, #0b1324 100%);
+    --dj-bg-surface: #131c2e;
     --dj-bg-subtle: #1e293b;
-    --dj-bg-sidebar: #0b1120;
-    --dj-text-main: #f8fafc;
+    --dj-bg-input: #0f172a;
+    --dj-bg-sidebar: linear-gradient(180deg, #0d1526 0%, #111827 100%);
+    --dj-sidebar-text: #f1f5f9;
+    --dj-sidebar-muted: #94a3b8;
+    --dj-sidebar-border: rgba(148, 163, 184, 0.14);
+    --dj-sidebar-card: rgba(255, 255, 255, 0.05);
+    --dj-sidebar-hover: rgba(59, 130, 246, 0.14);
+    --dj-text-main: #f1f5f9;
     --dj-text-muted: #94a3b8;
-    --dj-border: #1f2937;
+    --dj-border: rgba(148, 163, 184, 0.16);
     --dj-primary: #3b82f6;
     --dj-primary-hover: #60a5fa;
     --dj-emerald: #10b981;
     --dj-emerald-hover: #34d399;
     --dj-warning: #fbbf24;
     --dj-danger: #f87171;
-    --dj-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
-    --dj-shadow-hover: 0 10px 25px -4px rgba(59, 130, 246, 0.22);
-    --dj-accent-grad: linear-gradient(135deg, rgba(30, 58, 138, 0.35) 0%, rgba(6, 95, 70, 0.35) 100%);
+    --dj-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.45);
+    --dj-shadow-hover: 0 12px 28px -4px rgba(59, 130, 246, 0.25);
+    --dj-accent-grad: linear-gradient(135deg, rgba(30, 58, 138, 0.38) 0%, rgba(15, 23, 42, 0.65) 50%, rgba(6, 95, 70, 0.35) 100%);
+    --dj-accent-border: rgba(59, 130, 246, 0.32);
+    --dj-header-grad: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #064e3b 100%);
+    --dj-header-text: #f8fafc;
+    --dj-header-muted: #cbd5e1;
     --dj-hero-grad: linear-gradient(135deg, #030712 0%, #0f172a 60%, #064e3b 100%);
+    --dj-row-highlight: rgba(59, 130, 246, 0.15);
+    --dj-row-hover: rgba(255, 255, 255, 0.03);
 }
 
+/* ============================================================================
+   BASE & TYPOGRAPHIE ADAPTATIVE
+   ============================================================================ */
 body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--dj-bg-body-grad);
     background-color: var(--dj-bg-body);
     color: var(--dj-text-main);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     overflow-x: hidden;
+    transition: background-color 0.25s ease, color 0.2s ease;
+}
+
+.text-adaptive {
+    color: var(--dj-text-main) !important;
+}
+
+.text-muted {
+    color: var(--dj-text-muted) !important;
+}
+
+code {
+    color: var(--dj-primary);
+    background: var(--dj-bg-subtle);
+    padding: 0.15rem 0.4rem;
+    border-radius: 6px;
+    font-weight: 600;
 }
 
 /* ============================================================================
-   LAYOUT APPLICATION CONNECTÉE (SIDEBAR GAUCHE PC + CONTENU PRINCIPAL)
+   LAYOUT APPLICATION CONNECTÉE (SIDEBAR ADAPTATIVE PC + CONTENU PRINCIPAL)
    ============================================================================ */
 .app-shell {
     display: flex;
@@ -64,9 +111,9 @@ body {
 }
 
 .app-sidebar {
-    width: 260px;
+    width: 264px;
     background: var(--dj-bg-sidebar);
-    color: #f8fafc;
+    color: var(--dj-sidebar-text);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -75,8 +122,10 @@ body {
     bottom: 0;
     left: 0;
     z-index: 1030;
-    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid var(--dj-sidebar-border);
     padding: 1.25rem 1rem;
+    box-shadow: var(--dj-shadow);
+    transition: background 0.25s ease, border-color 0.25s ease;
 }
 
 .app-main {
@@ -88,7 +137,7 @@ body {
 
 @media (min-width: 992px) {
     .app-main--with-sidebar {
-        margin-left: 260px;
+        margin-left: 264px;
     }
 }
 
@@ -105,25 +154,54 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    color: #ffffff;
+    color: var(--dj-sidebar-text) !important;
     text-decoration: none;
     font-weight: 800;
     font-size: 1.25rem;
     letter-spacing: -0.02em;
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 1.25rem;
+    padding: 0.45rem 0.65rem;
+    margin-bottom: 1.15rem;
+}
+
+.sidebar-brand-sub {
+    display: block;
+    color: var(--dj-sidebar-muted);
+    font-weight: 500;
+    font-size: 0.72rem;
 }
 
 .sidebar-brand-icon {
     width: 38px;
     height: 38px;
     border-radius: 10px;
-    background: linear-gradient(135deg, #3b82f6, #10b981);
+    background: linear-gradient(135deg, #2563eb, #10b981);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     color: #ffffff;
     font-size: 1.2rem;
+    box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
+}
+
+.sidebar-profile-card {
+    background: var(--dj-sidebar-card);
+    border: 1px solid var(--dj-sidebar-border);
+    border-radius: 14px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1.1rem;
+}
+
+.sidebar-profile-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 700;
+    color: var(--dj-sidebar-muted);
+}
+
+.sidebar-profile-title {
+    font-weight: 700;
+    color: var(--dj-sidebar-text);
 }
 
 .sidebar-nav {
@@ -139,7 +217,7 @@ body {
     gap: 0.85rem;
     padding: 0.75rem 1rem;
     border-radius: 12px;
-    color: #94a3b8;
+    color: var(--dj-sidebar-muted);
     text-decoration: none;
     font-weight: 600;
     font-size: 0.92rem;
@@ -151,18 +229,24 @@ body {
 }
 
 .sidebar-link:hover {
-    color: #ffffff;
-    background: rgba(255, 255, 255, 0.06);
+    color: var(--dj-primary);
+    background: var(--dj-sidebar-hover);
 }
 
 .sidebar-link.active {
-    color: #ffffff;
+    color: #ffffff !important;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
-    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.32);
+}
+
+.sidebar-footer {
+    padding-top: 1rem;
+    margin-top: auto;
+    border-top: 1px solid var(--dj-sidebar-border);
 }
 
 /* ============================================================================
-   TOPBAR COMPACTE D'APPLICATION
+   TOPBAR COMPACTE D'APPLICATION & NAVBAR PUBLIQUE
    ============================================================================ */
 .app-topbar {
     background: var(--dj-bg-surface);
@@ -171,9 +255,9 @@ body {
     position: sticky;
     top: 0;
     z-index: 1020;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
 }
 
-/* Barre de navigation publique (quand on n'est pas connecté) : fond opaque + flou au scroll */
 .navbar-public,
 .navbar-djangui {
     background: rgba(255, 255, 255, 0.95);
@@ -186,8 +270,8 @@ body {
 
 [data-theme="dark"] .navbar-public,
 [data-theme="dark"] .navbar-djangui {
-    background: rgba(11, 17, 32, 0.95);
-    border-bottom: 1px solid rgba(59, 130, 246, 0.22);
+    background: rgba(15, 23, 42, 0.95);
+    border-bottom: 1px solid var(--dj-border);
 }
 
 .navbar-public .navbar-brand {
@@ -199,7 +283,7 @@ body {
    ============================================================================ */
 .hero-video-section {
     position: relative;
-    min-height: 82vh;
+    min-height: 80vh;
     display: flex;
     align-items: center;
     overflow: hidden;
@@ -218,11 +302,10 @@ body {
     pointer-events: none;
 }
 
-/* Voile dégradé par-dessus la vidéo pour que le texte reste 100 % lisible */
 .hero-video-overlay {
     position: absolute;
     inset: 0;
-    background: linear-gradient(125deg, rgba(7, 11, 25, 0.86) 0%, rgba(15, 23, 42, 0.76) 55%, rgba(6, 78, 59, 0.72) 100%);
+    background: linear-gradient(125deg, rgba(7, 11, 25, 0.84) 0%, rgba(15, 23, 42, 0.74) 55%, rgba(6, 78, 59, 0.70) 100%);
     backdrop-filter: blur(2px);
     z-index: 2;
 }
@@ -233,7 +316,7 @@ body {
 }
 
 /* ============================================================================
-   STEPPER DE PARCOURS GUIDÉ (4 ÉTAPES)
+   STEPPER DE PARCOURS GUIDÉ (4 ÉTAPES — LISIBLE CLAIR & SOMBRE)
    ============================================================================ */
 .stepper-djangui {
     display: grid;
@@ -255,12 +338,24 @@ body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    color: var(--dj-text-main) !important;
     transition: all 0.2s ease;
 }
 
+.step-item:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--dj-shadow);
+}
+
+.step-title {
+    font-size: 0.86rem;
+    font-weight: 700;
+    color: var(--dj-text-main) !important;
+}
+
 .step-item.step-done {
-    border-color: rgba(16, 185, 129, 0.4);
-    background: rgba(16, 185, 129, 0.05);
+    border-color: rgba(16, 185, 129, 0.45);
+    background: rgba(16, 185, 129, 0.07);
 }
 
 .step-item.step-active {
@@ -293,7 +388,7 @@ body {
 }
 
 /* ============================================================================
-   CARTES, BOUTONS, ONGLETS & COMPOSANTS FINTECH
+   CARTES, BOÎTES ADAPTATIVES, BOUTONS & ONGLETS FINTECH
    ============================================================================ */
 .card-djangui {
     background: var(--dj-bg-surface);
@@ -305,7 +400,7 @@ body {
 
 .card-accent-djangui {
     background: var(--dj-accent-grad);
-    border: 1px solid rgba(37, 99, 235, 0.22);
+    border: 1px solid var(--dj-accent-border);
     border-radius: 16px;
     box-shadow: var(--dj-shadow);
     color: var(--dj-text-main);
@@ -321,9 +416,15 @@ body {
 }
 
 .box-adaptive {
-    background-color: var(--dj-bg-subtle);
-    border: 1px solid var(--dj-border);
-    color: var(--dj-text-main);
+    background-color: var(--dj-bg-subtle) !important;
+    border: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
+}
+
+.surface-chip-djangui {
+    background-color: var(--dj-bg-surface) !important;
+    border: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
 }
 
 .border-left-navy    { border-left: 5px solid var(--dj-primary) !important; }
@@ -337,7 +438,7 @@ body {
     border: none;
     border-radius: 10px;
     font-weight: 600;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
     transition: all 0.2s ease;
 }
 
@@ -352,7 +453,7 @@ body {
     border: none;
     border-radius: 10px;
     font-weight: 600;
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
     transition: all 0.2s ease;
 }
 
@@ -363,15 +464,20 @@ body {
 
 .btn-theme-toggle {
     background: var(--dj-bg-subtle);
-    color: var(--dj-text-main);
+    color: var(--dj-text-main) !important;
     border: 1px solid var(--dj-border);
     border-radius: 999px;
-    padding: 0.35rem 0.85rem;
+    padding: 0.4rem 0.9rem;
     font-size: 0.82rem;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
+    transition: all 0.2s ease;
+}
+
+.btn-theme-toggle:hover {
+    border-color: var(--dj-primary);
 }
 
 /* Onglets modernes type Pilules FinTech */
@@ -391,28 +497,121 @@ body {
     font-weight: 600;
     font-size: 0.88rem;
     padding: 0.5rem 1rem;
+    transition: all 0.15s ease;
+}
+
+.nav-pills-djangui .nav-link:hover {
+    color: var(--dj-text-main);
 }
 
 .nav-pills-djangui .nav-link.active {
     background: var(--dj-bg-surface);
     color: var(--dj-primary);
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.10);
+}
+
+/* ============================================================================
+   TABLEAUX ADAPTATIFS (ZÉRO FOND BLANC FORCÉ EN MODE SOMBRE)
+   ============================================================================ */
+.table-djangui {
+    --bs-table-bg: transparent !important;
+    --bs-table-color: var(--dj-text-main) !important;
+    --bs-table-border-color: var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
 }
 
 .table-djangui thead th {
-    background-color: var(--dj-bg-subtle);
-    color: var(--dj-text-muted);
-    font-size: 0.78rem;
+    background-color: var(--dj-bg-subtle) !important;
+    color: var(--dj-text-muted) !important;
+    font-size: 0.76rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 700;
-    border-bottom: 1px solid var(--dj-border);
+    border-bottom: 1px solid var(--dj-border) !important;
     padding: 0.85rem 0.75rem;
 }
 
 .table-djangui tbody td {
     padding: 0.9rem 0.75rem;
-    border-bottom: 1px solid var(--dj-border);
+    border-bottom: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
+    background-color: transparent !important;
+}
+
+.table-djangui tbody tr:hover td {
+    background-color: var(--dj-row-hover) !important;
+}
+
+.row-highlight-djangui td {
+    background-color: var(--dj-row-highlight) !important;
+}
+
+.tfoot-djangui td,
+.tfoot-djangui th {
+    background-color: var(--dj-bg-subtle) !important;
+    color: var(--dj-text-main) !important;
+    border-top: 2px solid var(--dj-border) !important;
+    padding: 0.9rem 0.75rem;
+}
+
+/* ============================================================================
+   CHAMPS DE FORMULAIRE, MODALES & MENUS DÉROULANTS (CLAIR & SOMBRE)
+   ============================================================================ */
+.form-control,
+.form-select {
+    background-color: var(--dj-bg-input) !important;
+    border: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
+    border-radius: 10px;
+}
+
+.form-control::placeholder {
+    color: var(--dj-text-muted) !important;
+    opacity: 0.75;
+}
+
+.form-control:focus,
+.form-select:focus {
+    background-color: var(--dj-bg-surface) !important;
+    border-color: var(--dj-primary) !important;
+    color: var(--dj-text-main) !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16) !important;
+}
+
+.input-group-text {
+    background-color: var(--dj-bg-subtle) !important;
+    border: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
+}
+
+.modal-content {
+    background-color: var(--dj-bg-surface) !important;
+    color: var(--dj-text-main) !important;
+    border: 1px solid var(--dj-border) !important;
+    border-radius: 18px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+}
+
+.modal-header,
+.modal-footer {
+    border-color: var(--dj-border) !important;
+}
+
+.dropdown-menu {
+    background-color: var(--dj-bg-surface) !important;
+    border: 1px solid var(--dj-border) !important;
+    color: var(--dj-text-main) !important;
+    border-radius: 14px;
+}
+
+.dropdown-item {
+    color: var(--dj-text-main) !important;
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus {
+    background-color: var(--dj-bg-subtle) !important;
+    color: var(--dj-primary) !important;
 }
 
 /* ============================================================================
@@ -456,24 +655,40 @@ body {
 }
 
 /* ============================================================================
-   HERO PUBLIC & BANDEAUX COMPACTS
+   BANDEAUX D'EN-TÊTE ADAPTATIFS (DOUX EN MODE CLAIR, PROFONDS EN MODE SOMBRE)
    ============================================================================ */
-.hero-djangui {
-    background: var(--dj-hero-grad);
-    color: #ffffff;
-    padding: 4.5rem 0;
-    position: relative;
-    overflow: hidden;
+.page-header-dark {
+    background: var(--dj-header-grad);
+    color: var(--dj-header-text);
+    border-bottom: 1px solid var(--dj-border);
+    padding: 2.25rem 0;
+    margin-bottom: 1.85rem;
 }
 
-.page-header-dark {
-    background: var(--dj-hero-grad);
-    color: #ffffff;
-    padding: 2rem 0;
-    margin-bottom: 1.75rem;
+.page-header-dark h1,
+.page-header-dark h2 {
+    color: var(--dj-header-text) !important;
+}
+
+.page-header-dark p,
+.page-header-dark .text-muted {
+    color: var(--dj-header-muted) !important;
 }
 
 .footer-djangui {
     background: var(--dj-bg-surface);
     border-top: 1px solid var(--dj-border);
+}
+
+@media print {
+    .no-print,
+    .app-sidebar,
+    .app-topbar,
+    .mobile-bottom-nav,
+    .footer-djangui {
+        display: none !important;
+    }
+    .app-main--with-sidebar {
+        margin-left: 0 !important;
+    }
 }

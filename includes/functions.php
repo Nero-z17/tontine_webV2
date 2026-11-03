@@ -169,7 +169,7 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
         SELECT c.id, c.tontine_id, c.montant_penalite_retard, t.admin_id
         FROM cycles c
         INNER JOIN tontines t ON t.id = c.tontine_id
-        WHERE c.statut = 'actif'
+        WHERE c.statut IN ('actif', 'termine') AND c.tirage_verrouille = 1
     ");
     $cycles_actifs = $stmtCyclesActifs ? $stmtCyclesActifs->fetchAll() : [];
 
