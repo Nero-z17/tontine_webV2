@@ -292,7 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
         exit;
     }
 
-    // ACTION B : Un membre règle sa propre pénalité en attente -> Crédite la caisse du cycle (Point 6)
+    // ACTION B : Un membre règle sa propre pénalité en attente -> Crédite la caisse du cycle + Génère un reçu officiel dans payments
     if ($action === 'regler_ma_penalite' && $mon_cycle_member) {
         $penalty_id = (int)($_POST['penalty_id'] ?? 0);
         $stmtP = $pdo->prepare("
@@ -305,15 +305,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
 
         if ($pen) {
             $pdo->beginTransaction();
+
+            // 1. Marquer la pénalité comme réglée et créditer la caisse du cycle
             $pdo->prepare("UPDATE penalties SET statut = 'regle', date_reglement = NOW() WHERE id = ?")
                 ->execute([$penalty_id]);
             $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")
                 ->execute([(float)$pen['montant'], $cid]);
+
+            // 2. Identifier la cotisation de rattachement pour générer le reçu dans payments
+            $contrib_id_pen = !empty($pen['contribution_id']) ? (int)$pen['contribution_id'] : 0;
+            if ($contrib_id_pen <= 0) {
+                $stmtFindCo = $pdo->prepare("
+                    SELECT id FROM contributions
+                    WHERE cycle_member_id = ?
+                    ORDER BY (numero_seance = ?) DESC, numero_seance ASC
+                    LIMIT 1
+                ");
+                $stmtFindCo->execute([(int)$mon_cycle_member['id'], (int)$pen['numero_seance']]);
+                $contrib_id_pen = (int)$stmtFindCo->fetchColumn();
+            }
+
+            if ($contrib_id_pen > 0) {
+                $stmtCanal = $pdo->prepare("SELECT canal_paiement FROM users WHERE id = ? LIMIT 1");
+                $stmtCanal->execute([$user_id]);
+                $canal_usr = $stmtCanal->fetchColumn() ?: 'momo';
+
+                $ref_pen = 'PEN-S' . (int)$pen['numero_seance'] . '-' . date_actuelle('ymd') . '-' . random_int(100, 999);
+                $pdo->prepare("
+                    INSERT INTO payments (
+                        contribution_id, paye_par_user_id, montant_total,
+                        part_beneficiaire, part_caisse_reserve, mode_paiement,
+                        reference_paiement, date_paiement, est_en_retard,
+                        statut_paiement, commentaire
+                    ) VALUES (?, ?, ?, 0.00, ?, ?, ?, NOW(), 1, 'valide', ?)
+                ")->execute([
+                    $contrib_id_pen,
+                    $user_id,
+                    (float)$pen['montant'],
+                    (float)$pen['montant'],
+                    $canal_usr,
+                    $ref_pen,
+                    'Règlement pénalité -> Caisse du cycle (' . $pen['motif'] . ')'
+                ]);
+            }
+
             $pdo->commit();
 
-            // Point 4 : Vérifier si toutes les pénalités et cotisations sont réglées après la dernière séance pour clôturer le cycle
+            // Vérifier si toutes les pénalités et cotisations sont réglées après la dernière séance pour clôturer le cycle
             synchroniser_horloge_et_retards($pdo);
-            message_flash('success', 'Votre pénalité de ' . format_fcfa($pen['montant']) . ' a été réglée et versée dans la caisse du cycle.');
+            message_flash('success', 'Votre pénalité de ' . format_fcfa($pen['montant']) . ' a été réglée ! Un reçu a été ajouté dans « Mes Reçus ».');
         }
         header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=caisse');
         exit;
@@ -326,12 +366,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
             $nouveau_montant = round(($montant_cotis_cycle * $nouveau_pct) / 100, 2);
             $pdo->prepare("UPDATE cycles SET montant_penalite_retard = ? WHERE id = ?")
                 ->execute([$nouveau_montant, $cid]);
-            $pdo->prepare("
-                UPDATE penalties p
-                INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
-                SET p.montant = CASE WHEN p.motif LIKE '%taux double%' THEN ? ELSE ? END
-                WHERE cm.cycle_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente'
-            ")->execute([round($nouveau_montant * 2, 2), $nouveau_montant, $cid]);
+            if ($nouveau_montant > 0) {
+                $pdo->prepare("
+                    UPDATE penalties p
+                    INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+                    SET p.montant = CASE WHEN p.motif LIKE '%taux double%' THEN ? ELSE ? END
+                    WHERE cm.cycle_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente'
+                ")->execute([round($nouveau_montant * 2, 2), $nouveau_montant, $cid]);
+            } else {
+                $pdo->prepare("
+                    UPDATE penalties p
+                    INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+                    SET p.statut = 'annule'
+                    WHERE cm.cycle_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente'
+                ")->execute([$cid]);
+            }
             message_flash('success', "Taux de pénalité mis à jour : {$nouveau_pct} % (" . format_fcfa($nouveau_montant) . ") pour cotisation partielle et " . ($nouveau_pct * 2) . " % (" . format_fcfa($nouveau_montant * 2) . ") pour non-cotisation.");
         }
         header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=caisse');
@@ -351,11 +400,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
             $date_reg_op = ($type_op === 'bonus') ? date_actuelle('Y-m-d H:i:s') : null;
             $motif_complet = str_starts_with($motif_op, 'Séance #') ? $motif_op : "Séance #{$num_seance_op} : {$motif_op}";
 
+            // Si c'est une pénalité, la relier à la cotisation du membre sur cette séance pour le suivi et l'escalade
+            $contrib_id_op = null;
+            if ($type_op === 'penalite') {
+                $stmtCoOp = $pdo->prepare("
+                    SELECT id FROM contributions
+                    WHERE cycle_member_id = ?
+                    ORDER BY (numero_seance = ?) DESC, numero_seance ASC
+                    LIMIT 1
+                ");
+                $stmtCoOp->execute([$cm_cible, $num_seance_op]);
+                $found_co = $stmtCoOp->fetchColumn();
+                if ($found_co) {
+                    $contrib_id_op = (int)$found_co;
+                }
+            }
+
             $pdo->beginTransaction();
             $pdo->prepare("
-                INSERT INTO penalties (cycle_member_id, numero_seance, type_operation, montant, motif, statut, date_operation, date_reglement, auteur_id)
-                VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?)
-            ")->execute([$cm_cible, $num_seance_op, $type_op, $montant_op, $motif_complet, $statut_op, $date_reg_op, $user_id]);
+                INSERT INTO penalties (cycle_member_id, contribution_id, numero_seance, type_operation, montant, motif, statut, date_operation, date_reglement, auteur_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
+            ")->execute([$cm_cible, $contrib_id_op, $num_seance_op, $type_op, $montant_op, $motif_complet, $statut_op, $date_reg_op, $user_id]);
 
             if ($type_op === 'bonus') {
                 $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")
@@ -368,18 +433,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
         exit;
     }
 
-    // ACTION E (ADMIN) : Supprimer une pénalité en attente (L'admin ne règle jamais à la place du membre)
+    // ACTION E (ADMIN) : Supprimer une pénalité en attente
+    // On passe statut = 'annule' au lieu d'un DELETE physique pour empêcher le moteur automatique de la régénérer !
     if ($est_admin && $action === 'supprimer_operation') {
         $penalty_id = (int)($_POST['penalty_id'] ?? 0);
         $stmtDel = $pdo->prepare("
-            DELETE p FROM penalties p
+            UPDATE penalties p
             INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+            SET p.statut = 'annule'
             WHERE p.id = ? AND cm.cycle_id = ? AND p.statut = 'en_attente'
         ");
         $stmtDel->execute([$penalty_id, $cid]);
         if ($stmtDel->rowCount() > 0) {
             synchroniser_horloge_et_retards($pdo);
-            message_flash('warning', 'La pénalité en attente a été supprimée.');
+            message_flash('warning', 'La pénalité a été définitivement supprimée.');
         }
         header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=caisse');
         exit;
@@ -455,7 +522,7 @@ if ($cycle) {
             FROM penalties p
             JOIN cycle_members cm ON cm.id = p.cycle_member_id
             JOIN users u ON u.id = cm.user_id
-            WHERE cm.cycle_id = ?
+            WHERE cm.cycle_id = ? AND p.statut != 'annule'
             ORDER BY p.numero_seance ASC, p.date_operation ASC, p.id ASC
         ");
         $stmtOp->execute([$cid]);
@@ -490,7 +557,7 @@ if ($cycle) {
             FROM penalties p
             JOIN cycle_members cm ON cm.id = p.cycle_member_id
             JOIN users u ON u.id = cm.user_id
-            WHERE cm.cycle_id = ? AND cm.user_id = ? AND p.type_operation = 'penalite'
+            WHERE cm.cycle_id = ? AND cm.user_id = ? AND p.type_operation = 'penalite' AND p.statut != 'annule'
             ORDER BY p.numero_seance ASC, p.date_operation ASC, p.id ASC
         ");
         $stmtOp->execute([$cid, $user_id]);
@@ -1068,9 +1135,17 @@ require_once __DIR__ . '/includes/navbar.php';
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Montant exact à payer maintenant (FCFA) *</label>
-                        <div class="input-group">
-                            <input type="number" name="montant_saisi" id="inputMontantSaisi" class="form-control form-control-lg fw-bold text-success" min="100" step="100" required>
+                        <div class="input-group mb-2">
+                            <input type="number" name="montant_saisi" id="inputMontantSaisi" class="form-control form-control-lg fw-bold text-success" min="1" step="any" required>
                             <span class="input-group-text fw-bold">FCFA</span>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="btnPayerSeanceSeule">
+                                Juste cette séance
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-success d-none" id="btnToutSolder">
+                                Tout solder (séance + dettes + pénalités)
+                            </button>
                         </div>
                     </div>
 
@@ -1155,7 +1230,7 @@ require_once __DIR__ . '/includes/navbar.php';
                             </div>
                             <div class="col-6">
                                 <label class="form-label small fw-semibold">Montant (FCFA)</label>
-                                <input type="number" name="montant" class="form-control form-control-sm" min="100" step="100" required>
+                                <input type="number" name="montant" class="form-control form-control-sm" min="1" step="any" required>
                             </div>
                         </div>
                         <div class="mb-3">
@@ -1191,9 +1266,26 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('resumeResteSeance').textContent = resteSeance.toLocaleString('fr-FR') + ' FCFA';
         document.getElementById('resumeTotalMax').textContent    = maxPayable.toLocaleString('fr-FR') + ' FCFA';
 
-        const inputMontant = document.getElementById('inputMontantSaisi');
+        const inputMontant  = document.getElementById('inputMontantSaisi');
+        const btnSeance     = document.getElementById('btnPayerSeanceSeule');
+        const btnTout       = document.getElementById('btnToutSolder');
+
         inputMontant.max   = maxPayable;
-        inputMontant.value = resteSeance + (penalites > 0 ? penalites : 0);
+        inputMontant.value = resteSeance;
+
+        if (btnSeance) {
+            btnSeance.textContent = 'Juste cette séance (' + resteSeance.toLocaleString('fr-FR') + ' FCFA)';
+            btnSeance.onclick = function () { inputMontant.value = resteSeance; };
+        }
+        if (btnTout) {
+            if (maxPayable > resteSeance) {
+                btnTout.textContent = 'Tout solder (' + maxPayable.toLocaleString('fr-FR') + ' FCFA)';
+                btnTout.classList.remove('d-none');
+                btnTout.onclick = function () { inputMontant.value = maxPayable; };
+            } else {
+                btnTout.classList.add('d-none');
+            }
+        }
 
         const blocDettes = document.getElementById('blocDettesAnt');
         if (dettesAnt > 0) {

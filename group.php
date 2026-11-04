@@ -39,6 +39,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $membre_id      = (int)($_POST['membre_id'] ?? 0);
         $nouveau_statut = $_POST['statut_membre'] ?? '';
         if (in_array($nouveau_statut, ['actif', 'inactif', 'sorti'], true)) {
+            if ($nouveau_statut !== 'actif') {
+                // Vérifier si ce membre a encore des cotisations ou pénalités non réglées dans un cycle actif
+                $stmtEng = $pdo->prepare("
+                    SELECT 
+                        (SELECT COUNT(*) FROM contributions co
+                         INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                         INNER JOIN cycles c ON c.id = cm.cycle_id
+                         WHERE cm.user_id = ? AND c.tontine_id = ? AND c.statut = 'actif'
+                           AND co.cycle_member_id != co.beneficiaire_cycle_member_id
+                           AND co.montant_paye < co.montant_attendu) AS nb_cotis_dues,
+                        (SELECT COUNT(*) FROM penalties p
+                         INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+                         INNER JOIN cycles c ON c.id = cm.cycle_id
+                         WHERE cm.user_id = ? AND c.tontine_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_dues
+                ");
+                $stmtEng->execute([$membre_id, $tontine_id, $membre_id, $tontine_id]);
+                $eng = $stmtEng->fetch();
+
+                if (((int)($eng['nb_cotis_dues'] ?? 0) > 0) || ((int)($eng['nb_pen_dues'] ?? 0) > 0)) {
+                    message_flash('warning', 'Action refusée : ce membre participe à un cycle en cours et possède encore des cotisations ou pénalités à régler. S\'il est désactivé maintenant, il ne pourra plus se connecter pour solder ses dettes.');
+                    header('Location: ' . BASE_URL . '/group.php?tab=membres');
+                    exit;
+                }
+            }
+
             $pdo->prepare("UPDATE users SET statut_membre = ? WHERE id = ? AND tontine_id = ? AND role = 'member'")
                 ->execute([$nouveau_statut, $membre_id, $tontine_id]);
             message_flash('info', 'Le statut du membre a été mis à jour (' . $nouveau_statut . ').');

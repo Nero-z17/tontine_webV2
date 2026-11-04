@@ -142,7 +142,7 @@ require_once __DIR__ . '/includes/navbar.php';
                             <span class="input-group-text box-adaptive"><i class="bi bi-key-fill text-primary"></i></span>
                             <input type="password" id="mot_de_passe" name="mot_de_passe" class="form-control"
                                    placeholder="Votre mot de passe" required>
-                            <button class="btn btn-outline-secondary" type="button" id="togglePassword" title="Afficher/Masquer">
+                            <button class="btn box-adaptive" type="button" id="togglePassword" title="Afficher/Masquer">
                                 <i class="bi bi-eye"></i>
                             </button>
                         </div>

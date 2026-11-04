@@ -34,10 +34,10 @@ $au_plancher  = ($date_sim_iso <= $date_min_iso);
                 <form method="POST" class="d-flex flex-wrap justify-content-center align-items-center gap-1 m-0">
                     <?= champ_csrf() ?>
                     <div class="btn-group btn-group-sm" role="group">
-                        <button type="submit" name="djangui_time_action" value="-1m" class="btn btn-outline-secondary" <?= $au_plancher ? 'disabled' : '' ?>>-1 Mois</button>
-                        <button type="submit" name="djangui_time_action" value="-15d" class="btn btn-outline-secondary" <?= $au_plancher ? 'disabled' : '' ?>>-15j</button>
-                        <button type="submit" name="djangui_time_action" value="-7d" class="btn btn-outline-secondary" <?= $au_plancher ? 'disabled' : '' ?>>-1 Sem</button>
-                        <button type="submit" name="djangui_time_action" value="-1d" class="btn btn-outline-secondary" <?= $au_plancher ? 'disabled' : '' ?>>-1j</button>
+                        <button type="submit" name="djangui_time_action" value="-1m" class="btn box-adaptive" <?= $au_plancher ? 'disabled' : '' ?>>-1 Mois</button>
+                        <button type="submit" name="djangui_time_action" value="-15d" class="btn box-adaptive" <?= $au_plancher ? 'disabled' : '' ?>>-15j</button>
+                        <button type="submit" name="djangui_time_action" value="-7d" class="btn box-adaptive" <?= $au_plancher ? 'disabled' : '' ?>>-1 Sem</button>
+                        <button type="submit" name="djangui_time_action" value="-1d" class="btn box-adaptive" <?= $au_plancher ? 'disabled' : '' ?>>-1j</button>
                     </div>
 
                     <?php if ($decalage_sec !== 0): ?>

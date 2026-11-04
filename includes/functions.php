@@ -1,11 +1,11 @@
 <?php
-// includes/functions.php — Moteur métier Djangui V3 :
+// includes/functions.php — Moteur métier Djangui V3 (Certifié Multi-Scénarios) :
 // - Verrouillage séquentiel des séances
-// - Pénalité partielle (%) vs Non-cotisation (2x %)
+// - Pénalité partielle (1x %) vs Non-cotisation (2x %)
 // - Escalade progressive des pénalités au fil des séances écoulées
-// - Auto-compensation du bouffeur et retenue sur pot vers la caisse du cycle
+// - Suppression définitive d'une pénalité par l'admin (statut = 'annule' non régénéré)
+// - Auto-compensation du bouffeur et retenue sur pot (dettes + pénalités) sans jamais fausser montant_pot_recu
 // - Clôture automatique du cycle après la dernière séance dès que tout est réglé
-// - Horloge virtuelle avec plancher à la date de création de la tontine
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -134,9 +134,40 @@ function obtenir_seance_ouverte_max(PDO $pdo, int $cycle_id): int {
     return $seance_ouverte;
 }
 
+/**
+ * Recalcule exactement montant_pot_recu et pot_totalement_recu pour tous les membres d'un cycle
+ * à partir de la somme réelle des cotisations versées (empêche tout blocage en "En régularisation").
+ */
+function resynchroniser_pots_cycle(PDO $pdo, int $cycle_id): void {
+    $stmt = $pdo->prepare("
+        SELECT cm.id AS cm_id,
+               cm.montant_pot_attendu,
+               COALESCE(SUM(co.montant_paye), 0) AS total_collecte
+        FROM cycle_members cm
+        LEFT JOIN contributions co ON co.beneficiaire_cycle_member_id = cm.id
+        WHERE cm.cycle_id = ?
+        GROUP BY cm.id, cm.montant_pot_attendu
+    ");
+    $stmt->execute([$cycle_id]);
+
+    $stmtUpd = $pdo->prepare("
+        UPDATE cycle_members
+        SET montant_pot_recu = ?,
+            pot_totalement_recu = ?,
+            date_reception_pot = CASE WHEN ? = 1 AND date_reception_pot IS NULL THEN NOW() ELSE date_reception_pot END
+        WHERE id = ?
+    ");
+
+    foreach ($stmt->fetchAll() as $row) {
+        $collecte = round((float)$row['total_collecte'], 2);
+        $attendu  = round((float)$row['montant_pot_attendu'], 2);
+        $complet  = ($attendu > 0 && $collecte + 0.01 >= $attendu) ? 1 : 0;
+        $stmtUpd->execute([$collecte, $complet, $complet, (int)$row['cm_id']]);
+    }
+}
+
 // ============================================================================
-// 4. SYNCHRONISATION HORLOGE, PÉNALITÉS PROGRESSIVES (POINTS 7 & 8),
-//    RETENUE SUR POT VERS CAISSE DU CYCLE (POINT 6) & CLÔTURE AUTO (POINT 4)
+// 4. SYNCHRONISATION HORLOGE, PÉNALITÉS PROGRESSIVES, RETENUE SUR POT & CLÔTURE AUTO
 // ============================================================================
 function synchroniser_horloge_et_retards(PDO $pdo): void {
     $ts = temps_actuel();
@@ -153,20 +184,20 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
           AND statut = 'en_retard'
     ");
 
-    // 3. Si on a reculé le temps : supprimer les pénalités/majorations 'en_attente' dont la séance de déclenchement est redevenue future
+    // 3. Si on a reculé le temps : supprimer les pénalités/majorations 'en_attente' ou 'annule' dont la séance est redevenue future
     $pdo->exec("
         DELETE p FROM penalties p
         INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
         INNER JOIN contributions co_seance
             ON co_seance.cycle_member_id = cm.id AND co_seance.numero_seance = p.numero_seance
-        WHERE p.statut = 'en_attente'
+        WHERE p.statut IN ('en_attente', 'annule')
           AND p.type_operation = 'penalite'
           AND co_seance.date_echeance >= CURDATE()
     ");
 
     // 4. Auto-compensation de la propre part du bouffeur sur les séances ouvertes
     $stmtCyclesActifs = $pdo->query("
-        SELECT c.id, c.tontine_id, c.montant_penalite_retard, t.admin_id
+        SELECT c.id, c.tontine_id, c.statut, c.montant_penalite_retard, t.admin_id
         FROM cycles c
         INNER JOIN tontines t ON t.id = c.tontine_id
         WHERE c.statut IN ('actif', 'termine') AND c.tirage_verrouille = 1
@@ -177,57 +208,54 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
         $cid = (int)$cyc['id'];
         $max_ouverte = obtenir_seance_ouverte_max($pdo, $cid);
 
-        $stmtAutoSelf = $pdo->prepare("
-            SELECT co.id AS contribution_id,
-                   co.cycle_member_id,
-                   co.numero_seance,
-                   co.montant_attendu,
-                   co.montant_paye,
-                   cm.user_id,
-                   u.canal_paiement
-            FROM contributions co
-            INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
-            INNER JOIN users u ON u.id = cm.user_id
-            WHERE cm.cycle_id = ?
-              AND co.cycle_member_id = co.beneficiaire_cycle_member_id
-              AND co.numero_seance <= ?
-              AND co.statut != 'paye'
-        ");
-        $stmtAutoSelf->execute([$cid, $max_ouverte]);
+        // Sur un cycle actif, auto-compenser la propre part du bouffeur jusqu'à la séance ouverte
+        if ($cyc['statut'] === 'actif') {
+            $stmtAutoSelf = $pdo->prepare("
+                SELECT co.id AS contribution_id,
+                       co.cycle_member_id,
+                       co.numero_seance,
+                       co.montant_attendu,
+                       co.montant_paye,
+                       cm.user_id,
+                       u.canal_paiement
+                FROM contributions co
+                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                INNER JOIN users u ON u.id = cm.user_id
+                WHERE cm.cycle_id = ?
+                  AND co.cycle_member_id = co.beneficiaire_cycle_member_id
+                  AND co.numero_seance <= ?
+                  AND co.statut != 'paye'
+            ");
+            $stmtAutoSelf->execute([$cid, $max_ouverte]);
 
-        foreach ($stmtAutoSelf->fetchAll() as $selfCo) {
-            $reste_self = max(0.0, (float)$selfCo['montant_attendu'] - (float)$selfCo['montant_paye']);
-            if ($reste_self > 0) {
-                $pdo->prepare("UPDATE contributions SET montant_paye = montant_attendu, statut = 'paye' WHERE id = ?")
-                    ->execute([(int)$selfCo['contribution_id']]);
+            foreach ($stmtAutoSelf->fetchAll() as $selfCo) {
+                $reste_self = max(0.0, (float)$selfCo['montant_attendu'] - (float)$selfCo['montant_paye']);
+                if ($reste_self > 0) {
+                    $pdo->prepare("UPDATE contributions SET montant_paye = montant_attendu, statut = 'paye' WHERE id = ?")
+                        ->execute([(int)$selfCo['contribution_id']]);
 
-                $pdo->prepare("
-                    UPDATE cycle_members
-                    SET montant_pot_recu = montant_pot_recu + ?,
-                        pot_totalement_recu = CASE WHEN (montant_pot_recu + ?) >= montant_pot_attendu THEN 1 ELSE 0 END,
-                        date_reception_pot = CASE WHEN (montant_pot_recu + ?) >= montant_pot_attendu AND date_reception_pot IS NULL THEN NOW() ELSE date_reception_pot END
-                    WHERE id = ?
-                ")->execute([$reste_self, $reste_self, $reste_self, (int)$selfCo['cycle_member_id']]);
-
-                $ref = 'AUTO-POT-S' . (int)$selfCo['numero_seance'] . '-' . (int)$selfCo['contribution_id'];
-                $pdo->prepare("
-                    INSERT INTO payments (
-                        contribution_id, paye_par_user_id, montant_total,
-                        part_beneficiaire, part_caisse_reserve, mode_paiement,
-                        reference_paiement, date_paiement, est_en_retard,
-                        statut_paiement, commentaire
-                    ) VALUES (?, ?, ?, ?, 0.00, ?, ?, NOW(), 0, 'valide', ?)
-                ")->execute([
-                    (int)$selfCo['contribution_id'],
-                    (int)$selfCo['user_id'],
-                    $reste_self,
-                    $reste_self,
-                    $selfCo['canal_paiement'] ?: 'momo',
-                    $ref,
-                    "Compensation automatique sur le pot (Bouffeur de la Séance #{$selfCo['numero_seance']})"
-                ]);
+                    $ref = 'AUTO-POT-S' . (int)$selfCo['numero_seance'] . '-' . (int)$selfCo['contribution_id'];
+                    $pdo->prepare("
+                        INSERT INTO payments (
+                            contribution_id, paye_par_user_id, montant_total,
+                            part_beneficiaire, part_caisse_reserve, mode_paiement,
+                            reference_paiement, date_paiement, est_en_retard,
+                            statut_paiement, commentaire
+                        ) VALUES (?, ?, ?, ?, 0.00, ?, ?, NOW(), 0, 'valide', ?)
+                    ")->execute([
+                        (int)$selfCo['contribution_id'],
+                        (int)$selfCo['user_id'],
+                        $reste_self,
+                        $reste_self,
+                        $selfCo['canal_paiement'] ?: 'momo',
+                        $ref,
+                        "Compensation automatique sur le pot (Bouffeur de la Séance #{$selfCo['numero_seance']})"
+                    ]);
+                }
             }
         }
+
+        resynchroniser_pots_cycle($pdo, $cid);
     }
 
     // 5. Passer en 'en_retard' les cotisations échues non soldées (hors bouffeur de la séance)
@@ -241,9 +269,8 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
     ");
 
     // 6. POINTS 7 & 8 : GÉNÉRATION DES PÉNALITÉS PAR SÉANCE
-    //    - Point 7 : Cotisation partielle = 1x montant_penalite_retard | Non-cotisation (0 FCFA) = 2x montant_penalite_retard
-    //    - Point 8 : À la fin de chaque séance K suivante (date_echeance_K < CURDATE()), toute séance S < K
-    //      dont la cotisation ou la pénalité n'est toujours pas réglée reçoit une majoration de +1x (pénalité partielle).
+    //    Important : $stmtCheckPenSeance cherche toute ligne (y compris statut = 'annule' supprimée par l'admin)
+    //    pour ne JAMAIS recréer une pénalité que l'administrateur a supprimée !
     $stmtCheckPenSeance = $pdo->prepare("
         SELECT id FROM penalties
         WHERE contribution_id = ? AND numero_seance = ? AND type_operation = 'penalite'
@@ -255,6 +282,9 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
     ");
 
     foreach ($cycles_actifs as $cyc) {
+        if ($cyc['statut'] !== 'actif') {
+            continue;
+        }
         $cid        = (int)$cyc['id'];
         $admin_id   = (int)$cyc['admin_id'];
         $p_partiel  = (float)$cyc['montant_penalite_retard'];
@@ -264,7 +294,6 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             continue;
         }
 
-        // Récupérer toutes les séances du cycle dont la date d'échéance est dépassée (< CURDATE())
         $stmtSeancesEchues = $pdo->prepare("
             SELECT co.numero_seance, MIN(co.date_echeance) AS date_echeance
             FROM contributions co
@@ -281,7 +310,7 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $k          = (int)$se['numero_seance'];
             $date_ech_k = $se['date_echeance'];
 
-            // A) Pénalité initiale sur les cotisations impayées de la séance K elle-même (Point 7 : Partielle vs Non-cotisation 2x)
+            // A) Pénalité initiale sur les cotisations impayées de la séance K elle-même
             $stmtImpK = $pdo->prepare("
                 SELECT co.id AS contribution_id, co.cycle_member_id, co.montant_attendu, co.montant_paye
                 FROM contributions co
@@ -298,7 +327,6 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 if (!$stmtCheckPenSeance->fetchColumn()) {
                     $paye_actuel = (float)$imp['montant_paye'];
                     if ($paye_actuel <= 0) {
-                        // Non-cotisation totale : taux double (2x)
                         $montant_pen = $p_non_cot;
                         $motif_pen   = sprintf(
                             'Séance #%d : Non-cotisation à l\'échéance du %s (taux double)',
@@ -306,7 +334,6 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                             date('d/m/Y', strtotime($date_ech_k))
                         );
                     } else {
-                        // Cotisation partielle : taux normal (1x)
                         $montant_pen = $p_partiel;
                         $motif_pen   = sprintf(
                             'Séance #%d : Cotisation partielle en retard (échéance du %s)',
@@ -325,7 +352,7 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 }
             }
 
-            // B) Escalade / Majoration à la fin de la séance K (K > 1) pour les anciennes séances S < K non soldées (Point 8)
+            // B) Escalade / Majoration à la fin de la séance K (K > 1) pour les anciennes séances S < K non soldées
             if ($k > 1) {
                 $stmtAncNonSoldes = $pdo->prepare("
                     SELECT DISTINCT co.id AS contribution_id, co.cycle_member_id, co.numero_seance AS seance_origine
@@ -366,19 +393,18 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
         }
     }
 
-    // 7. RETENUE AUTOMATIQUE SUR LE POT DU BOUFFEUR (DETTES -> ANCIEN BOUFFEUR | PÉNALITÉS -> CAISSE DU CYCLE)
+    // 7. RETENUE AUTOMATIQUE SUR LE POT DU BOUFFEUR (SANS JAMAIS ALTÉRER montant_pot_recu)
     foreach ($cycles_actifs as $cyc) {
         $cid = (int)$cyc['id'];
         $max_ouverte = obtenir_seance_ouverte_max($pdo, $cid);
 
         $stmtBouffeurs = $pdo->prepare("
-            SELECT cm.id AS cm_id, cm.user_id, cm.rang_beneficiaire, cm.montant_pot_recu, u.canal_paiement
+            SELECT cm.id AS cm_id, cm.user_id, cm.rang_beneficiaire, u.canal_paiement
             FROM cycle_members cm
             INNER JOIN users u ON u.id = cm.user_id
             WHERE cm.cycle_id = ?
               AND cm.rang_beneficiaire IS NOT NULL
               AND cm.rang_beneficiaire <= ?
-              AND cm.montant_pot_recu > 0
             ORDER BY cm.rang_beneficiaire ASC
         ");
         $stmtBouffeurs->execute([$cid, $max_ouverte]);
@@ -389,15 +415,29 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $bf_rang    = (int)$bf['rang_beneficiaire'];
             $bf_canal   = $bf['canal_paiement'] ?: 'momo';
 
-            $stmtProprePart = $pdo->prepare("
+            // Somme réellement versée par les AUTRES membres dans le pot de ce bouffeur
+            $stmtCashAutres = $pdo->prepare("
                 SELECT COALESCE(SUM(montant_paye), 0)
                 FROM contributions
-                WHERE cycle_member_id = ? AND beneficiaire_cycle_member_id = ?
+                WHERE beneficiaire_cycle_member_id = ? AND cycle_member_id != ?
             ");
-            $stmtProprePart->execute([$bf_cm_id, $bf_cm_id]);
-            $propre_part = (float)$stmtProprePart->fetchColumn();
+            $stmtCashAutres->execute([$bf_cm_id, $bf_cm_id]);
+            $cash_autres = (float)$stmtCashAutres->fetchColumn();
 
-            $pot_disponible = max(0.0, (float)$bf['montant_pot_recu'] - $propre_part);
+            // Somme déjà prélevée par retenue automatique sur le pot de ce bouffeur (RET-DETTE-S{rang} ou RET-PEN-S{rang})
+            $stmtDejaRetenu = $pdo->prepare("
+                SELECT COALESCE(SUM(p.montant_total), 0)
+                FROM payments p
+                INNER JOIN contributions co ON co.id = p.contribution_id
+                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                WHERE cm.cycle_id = ?
+                  AND p.paye_par_user_id = ?
+                  AND p.reference_paiement LIKE ?
+            ");
+            $stmtDejaRetenu->execute([$cid, $bf_user_id, 'RET-%-S' . $bf_rang . '-%']);
+            $deja_retenu = (float)$stmtDejaRetenu->fetchColumn();
+
+            $pot_disponible = round(max(0.0, $cash_autres - $deja_retenu), 2);
             if ($pot_disponible <= 0) {
                 continue;
             }
@@ -418,32 +458,17 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 if ($pot_disponible <= 0) {
                     break;
                 }
-                $reste_dette = max(0.0, (float)$dette['montant_attendu'] - (float)$dette['montant_paye']);
-                $prelevement = min($pot_disponible, $reste_dette);
+                $reste_dette = round(max(0.0, (float)$dette['montant_attendu'] - (float)$dette['montant_paye']), 2);
+                $prelevement = round(min($pot_disponible, $reste_dette), 2);
 
                 if ($prelevement > 0) {
-                    $nouveau_paye = (float)$dette['montant_paye'] + $prelevement;
-                    $nouveau_statut = ($nouveau_paye >= (float)$dette['montant_attendu']) ? 'paye' : 'partiel';
+                    $nouveau_paye   = round((float)$dette['montant_paye'] + $prelevement, 2);
+                    $nouveau_statut = ($nouveau_paye + 0.01 >= (float)$dette['montant_attendu']) ? 'paye' : 'partiel';
 
                     $pdo->prepare("UPDATE contributions SET montant_paye = ?, statut = ? WHERE id = ?")
                         ->execute([$nouveau_paye, $nouveau_statut, (int)$dette['id']]);
 
-                    $pdo->prepare("
-                        UPDATE cycle_members
-                        SET montant_pot_recu = GREATEST(0, montant_pot_recu - ?),
-                            pot_totalement_recu = CASE WHEN (montant_pot_recu - ?) >= montant_pot_attendu THEN 1 ELSE 0 END
-                        WHERE id = ?
-                    ")->execute([$prelevement, $prelevement, $bf_cm_id]);
-
-                    $pdo->prepare("
-                        UPDATE cycle_members
-                        SET montant_pot_recu = montant_pot_recu + ?,
-                            pot_totalement_recu = CASE WHEN (montant_pot_recu + ?) >= montant_pot_attendu THEN 1 ELSE 0 END,
-                            date_reception_pot = CASE WHEN (montant_pot_recu + ?) >= montant_pot_attendu AND date_reception_pot IS NULL THEN NOW() ELSE date_reception_pot END
-                        WHERE id = ?
-                    ")->execute([$prelevement, $prelevement, $prelevement, (int)$dette['beneficiaire_cycle_member_id']]);
-
-                    $ref = 'RET-DETTE-S' . $bf_rang . '-C' . (int)$dette['id'] . '-' . random_int(10, 99);
+                    $ref = 'RET-DETTE-S' . $bf_rang . '-C' . (int)$dette['id'] . '-' . random_int(100, 999);
                     $pdo->prepare("
                         INSERT INTO payments (
                             contribution_id, paye_par_user_id, montant_total,
@@ -461,13 +486,13 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                         "Retenue automatique sur son pot (Tour #{$bf_rang}) pour régler sa dette de la Séance #{$dette['numero_seance']}"
                     ]);
 
-                    $pot_disponible -= $prelevement;
+                    $pot_disponible = round($pot_disponible - $prelevement, 2);
                 }
             }
 
-            // B) Déduire ensuite ses pénalités en attente sur son pot et les verser dans la Caisse DU CYCLE (Point 6)
+            // B) Déduire ensuite ses pénalités en attente sur son pot et les verser dans la Caisse DU CYCLE
             $stmtPenAttente = $pdo->prepare("
-                SELECT id, contribution_id, montant, motif
+                SELECT id, contribution_id, numero_seance, montant, motif
                 FROM penalties
                 WHERE cycle_member_id = ?
                   AND type_operation = 'penalite'
@@ -480,29 +505,55 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 if ($pot_disponible <= 0) {
                     break;
                 }
-                $montant_pen = (float)$pen['montant'];
-                $prelevement_pen = min($pot_disponible, $montant_pen);
+                $montant_pen     = round((float)$pen['montant'], 2);
+                $prelevement_pen = round(min($pot_disponible, $montant_pen), 2);
 
                 if ($prelevement_pen > 0) {
-                    $pdo->prepare("
-                        UPDATE cycle_members
-                        SET montant_pot_recu = GREATEST(0, montant_pot_recu - ?),
-                            pot_totalement_recu = CASE WHEN (montant_pot_recu - ?) >= montant_pot_attendu THEN 1 ELSE 0 END
-                        WHERE id = ?
-                    ")->execute([$prelevement_pen, $prelevement_pen, $bf_cm_id]);
-
-                    // Créditer la caisse de réserve DU CYCLE (Point 6)
+                    // Créditer la caisse de réserve DU CYCLE
                     $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")
                         ->execute([$prelevement_pen, $cid]);
 
-                    if ($prelevement_pen >= $montant_pen) {
+                    // Trouver la cotisation de rattachement pour tracer le reçu RET-PEN dans payments
+                    $co_pen_id = !empty($pen['contribution_id']) ? (int)$pen['contribution_id'] : 0;
+                    if ($co_pen_id <= 0) {
+                        $stmtFindCo = $pdo->prepare("
+                            SELECT id FROM contributions
+                            WHERE cycle_member_id = ?
+                            ORDER BY (numero_seance = ?) DESC, numero_seance ASC
+                            LIMIT 1
+                        ");
+                        $stmtFindCo->execute([$bf_cm_id, (int)$pen['numero_seance']]);
+                        $co_pen_id = (int)$stmtFindCo->fetchColumn();
+                    }
+
+                    if ($co_pen_id > 0) {
+                        $ref_pen = 'RET-PEN-S' . $bf_rang . '-P' . (int)$pen['id'] . '-' . random_int(100, 999);
+                        $pdo->prepare("
+                            INSERT INTO payments (
+                                contribution_id, paye_par_user_id, montant_total,
+                                part_beneficiaire, part_caisse_reserve, mode_paiement,
+                                reference_paiement, date_paiement, est_en_retard,
+                                statut_paiement, commentaire
+                            ) VALUES (?, ?, ?, 0.00, ?, ?, ?, NOW(), 1, 'valide', ?)
+                        ")->execute([
+                            $co_pen_id,
+                            $bf_user_id,
+                            $prelevement_pen,
+                            $prelevement_pen,
+                            $bf_canal,
+                            $ref_pen,
+                            "Retenue automatique sur son pot (Tour #{$bf_rang}) -> Caisse du cycle ({$pen['motif']})"
+                        ]);
+                    }
+
+                    if ($prelevement_pen + 0.01 >= $montant_pen) {
                         $nouveau_motif = str_contains($pen['motif'], '[Déduit sur pot]')
                             ? $pen['motif']
                             : $pen['motif'] . ' [Déduit sur pot]';
                         $pdo->prepare("UPDATE penalties SET statut = 'regle', date_reglement = NOW(), motif = ? WHERE id = ?")
                             ->execute([$nouveau_motif, (int)$pen['id']]);
                     } else {
-                        $reste_pen = $montant_pen - $prelevement_pen;
+                        $reste_pen = round($montant_pen - $prelevement_pen, 2);
                         $pdo->prepare("UPDATE penalties SET montant = ?, motif = ? WHERE id = ?")
                             ->execute([
                                 $reste_pen,
@@ -511,45 +562,46 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                             ]);
                     }
 
-                    $pot_disponible -= $prelevement_pen;
+                    $pot_disponible = round($pot_disponible - $prelevement_pen, 2);
                 }
             }
         }
 
+        // Resynchroniser les pots après les retenues éventuelles
+        resynchroniser_pots_cycle($pdo, $cid);
+
         // 8. POINT 4 : CLÔTURE AUTOMATIQUE DU CYCLE
-        //    Un cycle actif se clôture tout seul dès que :
-        //    - le tirage a été fait et les séances existent,
-        //    - la date de la dernière séance est passée (MAX(date_echeance) < CURDATE()),
-        //    - toutes les cotisations sont soldées ET toutes les pénalités sont réglées.
-        $stmtEtatCycle = $pdo->prepare("
-            SELECT COUNT(co.id) AS total_contrib,
-                   MAX(co.date_echeance) AS derniere_echeance,
-                   SUM(CASE WHEN co.montant_paye < co.montant_attendu THEN 1 ELSE 0 END) AS nb_cotis_impayees
-            FROM contributions co
-            INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
-            WHERE cm.cycle_id = ?
-        ");
-        $stmtEtatCycle->execute([$cid]);
-        $etatCycle = $stmtEtatCycle->fetch();
-
-        if ($etatCycle && (int)$etatCycle['total_contrib'] > 0 && !empty($etatCycle['derniere_echeance'])) {
-            $derniere_ech_passee = (strtotime($etatCycle['derniere_echeance']) < strtotime(date_actuelle('Y-m-d')));
-            $cotis_toutes_payees = ((int)$etatCycle['nb_cotis_impayees'] === 0);
-
-            $stmtPenNonReglees = $pdo->prepare("
-                SELECT COUNT(*)
-                FROM penalties p
-                INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+        if ($cyc['statut'] === 'actif') {
+            $stmtEtatCycle = $pdo->prepare("
+                SELECT COUNT(co.id) AS total_contrib,
+                       MAX(co.date_echeance) AS derniere_echeance,
+                       SUM(CASE WHEN co.montant_paye < co.montant_attendu THEN 1 ELSE 0 END) AS nb_cotis_impayees
+                FROM contributions co
+                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
                 WHERE cm.cycle_id = ?
-                  AND p.type_operation = 'penalite'
-                  AND p.statut = 'en_attente'
             ");
-            $stmtPenNonReglees->execute([$cid]);
-            $nb_pen_attente = (int)$stmtPenNonReglees->fetchColumn();
+            $stmtEtatCycle->execute([$cid]);
+            $etatCycle = $stmtEtatCycle->fetch();
 
-            if ($derniere_ech_passee && $cotis_toutes_payees && $nb_pen_attente === 0) {
-                $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = CURDATE() WHERE id = ?")
-                    ->execute([$cid]);
+            if ($etatCycle && (int)$etatCycle['total_contrib'] > 0 && !empty($etatCycle['derniere_echeance'])) {
+                $derniere_ech_passee = (strtotime($etatCycle['derniere_echeance']) < strtotime(date_actuelle('Y-m-d')));
+                $cotis_toutes_payees = ((int)$etatCycle['nb_cotis_impayees'] === 0);
+
+                $stmtPenNonReglees = $pdo->prepare("
+                    SELECT COUNT(*)
+                    FROM penalties p
+                    INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+                    WHERE cm.cycle_id = ?
+                      AND p.type_operation = 'penalite'
+                      AND p.statut = 'en_attente'
+                ");
+                $stmtPenNonReglees->execute([$cid]);
+                $nb_pen_attente = (int)$stmtPenNonReglees->fetchColumn();
+
+                if ($derniere_ech_passee && $cotis_toutes_payees && $nb_pen_attente === 0) {
+                    $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = CURDATE() WHERE id = ?")
+                        ->execute([$cid]);
+                }
             }
         }
     }

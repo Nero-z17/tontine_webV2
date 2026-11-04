@@ -43,15 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
         $dt_debut = DateTime::createFromFormat('!Y-m-d', $date_debut);
         $dt_fin   = ($date_fin !== '') ? DateTime::createFromFormat('!Y-m-d', $date_fin) : null;
 
-        // verifier si ce nom de cycle exste deja 
-        $stmDoublon = $pdo->prepare("SELECT COUNT(*) FROM cycles WHERE tontine_id = ? AND titre = ?");
-        $stmDoublon->execute([$tontine_id, $titre]);
-        $titre_existe = ((int)$stmDoublon->fetchColumn() > 0);
-
         if ($titre === '' || $montant_cotisation <= 0 || !$dt_debut) {
             message_flash('danger', 'Veuillez renseigner un titre, un montant de cotisation valide et une date de début.');
-        } elseif ($titre_existe) {
-            message_flash('danger', "Un cycle nommé « {$titre} » existe déjà dans votre tontine. Choississez un autre nom de titre.");
         } elseif (count($membres_retenus) < 2) {
             message_flash('danger', 'Veuillez sélectionner au moins 2 membres participants pour créer un cycle.');
         } elseif ($pourcentage_penalite < 0 || $pourcentage_penalite > 50) {
@@ -143,11 +136,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
             exit;
         }
 
-        // Clôturer le statut des anciens cycles dont toutes les séances sont passées (leurs dettes et pénalités restent réglables dans Cotisations & Caisse)
-        foreach ($cycles_echus_a_basculer as $id_echu) {
-            $pdo->prepare("UPDATE cycles SET statut = 'termine' WHERE id = ? AND tontine_id = ?")
-                ->execute([$id_echu, $tontine_id]);
-        }
+        // Un ancien cycle dont toutes les séances sont passées ne passe à 'termine' que s'il n'a plus d'impayés ni de pénalités en attente.
+        // S'il lui reste des dettes ou pénalités, il reste ouvert au recouvrement jusqu'à règlement complet, sans bloquer ce nouveau cycle !
+        synchroniser_horloge_et_retards($pdo);
 
         $stmtC = $pdo->prepare("SELECT * FROM cycles WHERE id = ? AND tontine_id = ? AND statut = 'brouillon' LIMIT 1");
         $stmtC->execute([$cycle_id, $tontine_id]);
@@ -594,7 +585,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                     $per_s      = formater_periode_seance($cycle_choisi['date_debut'], $num_s, $cycle_choisi['frequence'], $sb['date_echeance']);
                                     $est_act    = ($cycle_choisi['statut'] === 'actif' && $num_s === $seance_max_ouverte);
                                     $est_fermee = ($cycle_choisi['statut'] === 'actif' && $num_s > $seance_max_ouverte);
-                                    $pot_ok     = ((int)$sb['pot_totalement_recu'] === 1 || (float)$sb['montant_pot_recu'] >= (float)$sb['montant_pot_attendu']);
+                                    $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
                                 ?>
                                 <tr class="<?= $est_act ? 'row-highlight-djangui' : '' ?>">
                                     <td class="fw-bold">
@@ -616,7 +607,7 @@ require_once __DIR__ . '/includes/navbar.php';
 
                                     <?php if ($est_admin): ?>
                                         <td class="text-end">
-                                            <strong class="text-success"><?= format_fcfa($sb['montant_pot_recu']) ?></strong>
+                                            <strong class="text-success"><?= format_fcfa($sb['total_seance_paye']) ?></strong>
                                             <div class="small text-muted">sur <?= format_fcfa($sb['montant_pot_attendu']) ?> (<?= (int)$sb['nb_payes'] ?>/<?= (int)$sb['nb_cotisations'] ?>)</div>
                                         </td>
                                     <?php else: ?>
@@ -718,7 +709,7 @@ require_once __DIR__ . '/includes/navbar.php';
                     <div class="row g-3 mb-3">
                         <div class="col-sm-6">
                             <label class="form-label small fw-semibold">Cotisation par séance (FCFA) *</label>
-                            <input type="number" name="montant_cotisation" id="inputMontantCotisCycle" class="form-control" min="1000" step="500" value="50000" required>
+                            <input type="number" name="montant_cotisation" id="inputMontantCotisCycle" class="form-control" min="100" step="any" value="50000" required>
                         </div>
                         <div class="col-sm-6">
                             <label class="form-label small fw-semibold">Fréquence des séances *</label>
