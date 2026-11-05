@@ -320,10 +320,19 @@ require_once __DIR__ . '/includes/navbar.php';
                                 </div>
                             </div>
 
+                            <?php
+                                $retenue_pot_act = obtenir_retenue_sur_pot($pdo, (int)$cycle['id'], (int)$pot_seance_actuelle['bouffeur_user_id'], (int)$pot_seance_actuelle['numero_seance']);
+                                $net_bouffeur_act = max(0.0, $pot_recu - $retenue_pot_act);
+                            ?>
                             <div class="text-sm-end">
                                 <div class="text-muted small">Pot collecté</div>
                                 <div class="fs-3 fw-bold text-success"><?= format_fcfa($pot_recu) ?></div>
                                 <div class="small text-muted">sur <?= format_fcfa($pot_attendu) ?></div>
+                                <?php if ($retenue_pot_act > 0): ?>
+                                    <div class="badge bg-warning text-dark mt-1">
+                                        Retenue : -<?= format_fcfa($retenue_pot_act) ?> (Net : <?= format_fcfa($net_bouffeur_act) ?>)
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 

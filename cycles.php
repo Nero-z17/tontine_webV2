@@ -606,9 +606,19 @@ require_once __DIR__ . '/includes/navbar.php';
                                     </td>
 
                                     <?php if ($est_admin): ?>
+                                        <?php
+                                            $ret_s = obtenir_retenue_sur_pot($pdo, (int)$cycle_choisi['id'], (int)$sb['bouffeur_user_id'], $num_s);
+                                            $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
+                                        ?>
                                         <td class="text-end">
                                             <strong class="text-success"><?= format_fcfa($sb['total_seance_paye']) ?></strong>
                                             <div class="small text-muted">sur <?= format_fcfa($sb['montant_pot_attendu']) ?> (<?= (int)$sb['nb_payes'] ?>/<?= (int)$sb['nb_cotisations'] ?>)</div>
+                                            <?php if ($ret_s > 0): ?>
+                                                <div class="small text-warning-emphasis fw-semibold">
+                                                    Retenue : -<?= format_fcfa($ret_s) ?> (Net : <?= format_fcfa($net_s) ?>)
+                                                </div>
+                                            </div>
+                                            <?php endif; ?>
                                         </td>
                                     <?php else: ?>
                                         <!-- Point 1 & Point 3 : Le membre voit le montant du pot du tour mais pas le détail des versements des autres -->

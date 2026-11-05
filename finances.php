@@ -400,27 +400,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
             $date_reg_op = ($type_op === 'bonus') ? date_actuelle('Y-m-d H:i:s') : null;
             $motif_complet = str_starts_with($motif_op, 'Séance #') ? $motif_op : "Séance #{$num_seance_op} : {$motif_op}";
 
-            // Si c'est une pénalité, la relier à la cotisation du membre sur cette séance pour le suivi et l'escalade
-            $contrib_id_op = null;
-            if ($type_op === 'penalite') {
-                $stmtCoOp = $pdo->prepare("
-                    SELECT id FROM contributions
-                    WHERE cycle_member_id = ?
-                    ORDER BY (numero_seance = ?) DESC, numero_seance ASC
-                    LIMIT 1
-                ");
-                $stmtCoOp->execute([$cm_cible, $num_seance_op]);
-                $found_co = $stmtCoOp->fetchColumn();
-                if ($found_co) {
-                    $contrib_id_op = (int)$found_co;
-                }
-            }
-
+            // Les pénalités manuelles gardent contribution_id = NULL pour ne jamais interférer avec la détection automatique des retards de cotisation
             $pdo->beginTransaction();
             $pdo->prepare("
                 INSERT INTO penalties (cycle_member_id, contribution_id, numero_seance, type_operation, montant, motif, statut, date_operation, date_reglement, auteur_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)
-            ")->execute([$cm_cible, $contrib_id_op, $num_seance_op, $type_op, $montant_op, $motif_complet, $statut_op, $date_reg_op, $user_id]);
+                VALUES (?, NULL, ?, ?, ?, ?, ?, NOW(), ?, ?)
+            ")->execute([$cm_cible, $num_seance_op, $type_op, $montant_op, $motif_complet, $statut_op, $date_reg_op, $user_id]);
 
             if ($type_op === 'bonus') {
                 $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")

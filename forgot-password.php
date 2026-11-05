@@ -20,7 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $erreur = "Aucun compte actif ne correspond à cet identifiant.";
         } else {
             $token = (string)random_int(100000, 999999);
-            $expire = date('Y-m-d H:i:s', time() + 900); // Valable 15 minutes
+            $expire = date('Y-m-d H:i:s', temps_actuel() + 900); // Valable 15 minutes
 
             $upd = $pdo->prepare("UPDATE users SET reset_token = ?, reset_expire_at = ? WHERE id = ?");
             $upd->execute([$token, $expire, $user['id']]);

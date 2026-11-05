@@ -138,6 +138,23 @@ function obtenir_seance_ouverte_max(PDO $pdo, int $cycle_id): int {
  * Recalcule exactement montant_pot_recu et pot_totalement_recu pour tous les membres d'un cycle
  * à partir de la somme réelle des cotisations versées (empêche tout blocage en "En régularisation").
  */
+/**
+ * Retourne le montant total retenu automatiquement sur le pot d'un bouffeur (dettes + pénalités) lors de sa séance.
+ */
+function obtenir_retenue_sur_pot(PDO $pdo, int $cycle_id, int $bouffeur_user_id, int $rang_seance): float {
+    $stmt = $pdo->prepare("
+        SELECT COALESCE(SUM(p.montant_total), 0)
+        FROM payments p
+        INNER JOIN contributions co ON co.id = p.contribution_id
+        INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+        WHERE cm.cycle_id = ?
+          AND p.paye_par_user_id = ?
+          AND p.reference_paiement LIKE ?
+    ");
+    $stmt->execute([$cycle_id, $bouffeur_user_id, 'RET-%-S' . $rang_seance . '-%']);
+    return round((float)$stmt->fetchColumn(), 2);
+}
+
 function resynchroniser_pots_cycle(PDO $pdo, int $cycle_id): void {
     $stmt = $pdo->prepare("
         SELECT cm.id AS cm_id,
@@ -415,14 +432,14 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $bf_rang    = (int)$bf['rang_beneficiaire'];
             $bf_canal   = $bf['canal_paiement'] ?: 'momo';
 
-            // Somme réellement versée par les AUTRES membres dans le pot de ce bouffeur
-            $stmtCashAutres = $pdo->prepare("
+            // Somme totale collectée sur le pot de ce bouffeur (y compris sa part auto-compensée dès l'ouverture de sa séance)
+            $stmtPotTotal = $pdo->prepare("
                 SELECT COALESCE(SUM(montant_paye), 0)
                 FROM contributions
-                WHERE beneficiaire_cycle_member_id = ? AND cycle_member_id != ?
+                WHERE beneficiaire_cycle_member_id = ?
             ");
-            $stmtCashAutres->execute([$bf_cm_id, $bf_cm_id]);
-            $cash_autres = (float)$stmtCashAutres->fetchColumn();
+            $stmtPotTotal->execute([$bf_cm_id]);
+            $pot_total_actuel = (float)$stmtPotTotal->fetchColumn();
 
             // Somme déjà prélevée par retenue automatique sur le pot de ce bouffeur (RET-DETTE-S{rang} ou RET-PEN-S{rang})
             $stmtDejaRetenu = $pdo->prepare("
@@ -437,7 +454,7 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $stmtDejaRetenu->execute([$cid, $bf_user_id, 'RET-%-S' . $bf_rang . '-%']);
             $deja_retenu = (float)$stmtDejaRetenu->fetchColumn();
 
-            $pot_disponible = round(max(0.0, $cash_autres - $deja_retenu), 2);
+            $pot_disponible = round(max(0.0, $pot_total_actuel - $deja_retenu), 2);
             if ($pot_disponible <= 0) {
                 continue;
             }
