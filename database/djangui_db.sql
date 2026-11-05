@@ -3,12 +3,12 @@
 -- Compatible XAMPP / WAMP (MySQL 8.0+ / MariaDB 10.4+ / PHP 8.2+)
 -- ============================================================================
 
-SET NAMES utf8mb4;
-SET TIME_ZONE = '+01:00'; -- Fuseau horaire du Cameroun (WAT)
+-- SET NAMES utf8mb4;
+-- SET TIME_ZONE = '+01:00'; -- Fuseau horaire du Cameroun (WAT)
 
-DROP DATABASE IF EXISTS djangui_db;
-CREATE DATABASE djangui_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE djangui_db;
+-- DROP DATABASE IF EXISTS djangui_db;
+-- CREATE DATABASE djangui_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- USE djangui_db;
 
 -- ============================================================================
 -- 1. TABLE : users (Comptes utilisateurs : Secrétaire/Admin et Membres)

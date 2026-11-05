@@ -13,12 +13,24 @@ if (session_status() === PHP_SESSION_NONE) {
 
 require_once __DIR__ . '/db.php';
 
-$racine_fs = str_replace('\\', '/', realpath(__DIR__ . '/..'));
-$doc_root  = str_replace('\\', '/', realpath($_SERVER['DOCUMENT_ROOT'] ?? ''));
-$sous_chem = ($doc_root !== '' && str_starts_with($racine_fs, $doc_root))
-    ? substr($racine_fs, strlen($doc_root))
-    : '/djangui';
-define('BASE_URL', 'http://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim($sous_chem, '/'));
+// Détection automatique : WAMP en local vs Hébergement en ligne (InfinityFree HTTPS)
+$est_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+    || (($_SERVER['SERVER_PORT'] ?? 80) == 443);
+$protocole = $est_https ? 'https://' : 'http://';
+$hote      = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+if ($hote === 'localhost' || str_starts_with($hote, '127.0.0.1')) {
+    $racine_fs = str_replace('\\', '/', realpath(__DIR__ . '/..'));
+    $doc_root  = str_replace('\\', '/', realpath($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    $sous_chem = ($doc_root !== '' && str_starts_with($racine_fs, $doc_root))
+        ? substr($racine_fs, strlen($doc_root))
+        : '/djanguitest';
+} else {
+    // Sur InfinityFree, les fichiers sont directement à la racine de /htdocs
+    $sous_chem = '';
+}
+define('BASE_URL', $protocole . $hote . rtrim($sous_chem, '/'));
 
 // ============================================================================
 // 1. HORLOGE VIRTUELLE & PLANCHER DATE DE CRÉATION DE LA TONTINE
@@ -189,8 +201,12 @@ function resynchroniser_pots_cycle(PDO $pdo, int $cycle_id): void {
 function synchroniser_horloge_et_retards(PDO $pdo): void {
     $ts = temps_actuel();
 
-    // 1. Aligner l'horloge de la session MySQL (CURDATE(), NOW(), CURRENT_TIMESTAMP)
-    $pdo->exec("SET SESSION timestamp = " . (int)$ts);
+    // 1. Aligner l'horloge de la session MySQL (autorisé sur WAMP, ignoré proprement si refusé sur mutualisé)
+    try {
+        $pdo->exec("SET SESSION timestamp = " . (int)$ts);
+    } catch (PDOException $e) {
+        // Sur InfinityFree (sans privilège SUPER), on continue sans erreur fatale
+    }
 
     // 2. Si on a reculé le temps : remettre en 'en_attente' ou 'partiel' les cotisations futures
     $pdo->exec("
