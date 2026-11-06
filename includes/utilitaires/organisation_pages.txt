@@ -1,0 +1,186 @@
+================================================================================
+
+ORGANISATION OFFICIELLE DES PAGES ET FICHIERS DU PROJET DJANGUI (VERSION FINALE)
+
+================================================================================
+
+
+
+djangui/
+
+│
+
+├── database/
+
+│   └── djangui_db.sql               # Script SQL complet : les 10 tables InnoDB + contraintes + jeu de données de démonstration
+
+│
+
+├── assets/                          # Ressources statiques (Design System, scripts et média vidéo)
+
+│   ├── css/
+
+│   │   └── style.css                # Feuille de style Bi-Thème (Mode Clair lumineux & Mode Sombre Bleu Nuit)
+
+│   ├── js/
+
+│   │   └── script.js                # Bascule Clair/Sombre instantanée + interactions dynamiques UI
+
+│   └── videos/
+
+│       └── hero.mp4                 # Vidéo d'arrière-plan en boucle de la page d'accueil (scène Djangui au Cameroun)
+
+│
+
+├── includes/                        # Socle technique partagé par toutes les pages de l'application (7 fichiers)
+
+│   ├── db.php                       # Connexion PDO MySQL hybride (détection automatique WAMP local vs InfinityFree en ligne)
+
+│   ├── functions.php                # Moteur métier central : sécurité XSS/CSRF, horloge simulée, verrouillage séquentiel des séances,
+
+│   │                                # calcul des pénalités (1x partielle / 2x non-cotisation), retenue automatique sur pot,
+
+│   │                                # resynchronisation temps réel des pots et clôture automatique de cycle
+
+│   ├── header.php                   # En-tête HTML5, chargement de Bootstrap 5.3.3, Bootstrap Icons et détection du thème
+
+│   ├── navbar.php                   # Navigation adaptative : Barre publique, ou Sidebar PC + Topbar alertes + Barre mobile basse
+
+│   ├── footer.php                   # Pied de page + Barre interactive de simulation temporelle (avec plancher de date de création)
+
+│   ├── waiting.php                  # Écran d'attente affiché aux nouveaux inscrits tant que la Secrétaire n'a pas validé leur adhésion
+
+│   └── sim_clock.json               # Fichier JSON stockant le décalage temporel (en secondes) du simulateur d'échéances
+
+│
+
+├── (À la racine : Les 6 pages publiques et d'authentification)
+
+│   ├── index.php                    # Page d'accueil immersive avec vidéo hero.mp4 en boucle, animations au défilement (Scroll Reveal),
+
+│   │                                # compteurs dynamiques, comparatif Avant/Après, Bento Grid, tarif SaaS et FAQ interactive
+
+│   ├── register-tontine.php         # Création atomique d'une nouvelle tontine et du compte Secrétaire/Admin (active les 2 mois d'essai)
+
+│   ├── join-tontine.php             # Inscription d'un membre via le code d'invitation de la tontine (statut initial : en_attente)
+
+│   ├── login.php                    # Connexion sécurisée (identifiant ou téléphone) avec protection anti-force brute (5 essais max)
+
+│   ├── forgot-password.php          # Récupération de mot de passe par code temporaire horodaté (valable 15 minutes)
+
+│   └── logout.php                   # Déconnexion propre et destruction sécurisée de la session et des cookies
+
+│
+
+└── (À la racine : Les 4 écrans internes unifiés — S'adaptent automatiquement au rôle Admin / Membre)
+
+    ├── dashboard.php                # ÉCRAN 1 — ACCUEIL & SÉANCE ACTIVE :
+
+    │                                #   - Guide de démarrage en 3 étapes (si nouveau groupe)
+
+    │                                #   - Indicateurs clés (KPIs), avancement du pot du bouffeur du tour et badge de retenue sur pot
+
+    │                                #   - Guichet de paiement rapide de la séance active (MTN MoMo / Orange Money / Espèces)
+
+    │                                #   - Programmation, publication et accès direct aux réunions Zoom
+
+    │
+
+    ├── cycles.php                   # ÉCRAN 2 — CYCLES, TIRAGE AU SORT, CALENDRIER & BILANS :
+
+    │                                #   - Création d'un cycle (brouillon), sélection des participants, activation et arrêt/clôture
+
+    │                                #   - Tirage au sort aléatoire verrouillé (attribution des rangs 1..N et génération des séances)
+
+    │                                #   - Calendrier séquentiel des séances (Payée, En cours, En régularisation, Verrouillée)
+
+    │                                #   - Bilan financier multi-cycles détaillé avec fonction d'impression
+
+    │
+
+    ├── finances.php                 # ÉCRAN 3 — COTISATIONS, PAIEMENTS VENTILÉS & CAISSE DE RÉSERVE :
+
+    │                                #   - Sélecteur de cycle en haut de page (isole les cotisations et la caisse propres à chaque cycle)
+
+    │                                #   - Onglet 1 : Mes Cotisations & Régularisations (paiement normal ou remboursement de retard)
+
+    │                                #   - Onglet 2 : Suivi Global des Cotisations par séance (vue détaillée de tous les membres)
+
+    │                                #   - Onglet 3 : Historique des Paiements et Reçus (ventilation Part Bouffeur / Part Caisse)
+
+    │                                #   - Onglet 4 : Caisse de Réserve & Pénalités/Bonus groupés par séance (l'Admin gère toute la
+
+    │                                #     caisse et peut annuler définitivement une pénalité ; le simple membre ne voit que le solde
+
+    │                                #     de la caisse et ses propres pénalités)
+
+    │
+
+    └── group.php                    # ÉCRAN 4 — MEMBRES, PROFIL, CARTE QR CODE, ABONNEMENT SAAS & PASSATION :
+
+                                     #   - Onglet 1 (Membres) : Validation des demandes d'adhésion (Accepter/Refuser après contrôle CNI),
+
+                                     #     liste des membres actifs/inactifs/sortis (numéro CNI visible uniquement par l'Admin)
+
+                                     #   - Onglet 2 (Mon Profil & Carte) : Mise à jour du numéro MoMo/OM, mot de passe et Carte de
+
+                                     #     membre numérique officielle avec QR Code intégré
+
+                                     #   - Onglet 3 (Infos Tontine) : Paramètres de la tontine, copie/régénération du code d'invitation
+
+                                     #     et clôture définitive de la tontine
+
+                                     #   - Onglet 4 (Abonnement & Passation) : Suivi des 2 mois d'essai gratuit, renouvellement SaaS
+
+                                     #     à 2 000 FCFA/mois et passation atomique du rôle d'administrateur à un autre membre actif
+
+
+
+================================================================================
+
+TABLEAU DE CORRESPONDANCE : ANCIENNE ARCHITECTURE (31 PAGES) -> NOUVELLE (4 ÉCRANS)
+
+================================================================================
+
+
+
+1. Écran 1 : dashboard.php
+
+   Regroupe et remplace : admin/dashboard.php, member/dashboard.php, admin/meetings.php,
+
+   member/meetings.php et member/notifications.php.
+
+
+
+2. Écran 2 : cycles.php
+
+   Regroupe et remplace : admin/cycles.php, admin/draws.php, admin/reports.php,
+
+   member/draw-rank.php et member/calendar.php.
+
+
+
+3. Écran 3 : finances.php
+
+   Regroupe et remplace : member/contributions.php, admin/contributions.php,
+
+   member/payments.php, admin/penalties.php et member/penalties.php.
+
+
+
+4. Écran 4 : group.php
+
+   Regroupe et remplace : admin/members.php, member/tontine.php, admin/tontine-info.php,
+
+   admin/settings.php, member/profile.php, member/card.php, admin/subscription.php
+
+   et admin/transfer.php.
+
+
+
+5. Page d'accueil : index.php
+
+   Intègre directement les sections de présentation, de tarification (ancien pricing.php)
+
+   et les règles de fonctionnement / FAQ (ancien about-terms.php).
+
