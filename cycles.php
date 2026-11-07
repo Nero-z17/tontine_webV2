@@ -377,10 +377,13 @@ require_once __DIR__ . '/includes/navbar.php';
                     </select>
                 </form>
             <?php endif; ?>
-
+            
+            <?php if ($est_admin) : ?>
             <button type="button" onclick="window.print()" class="btn btn-sm btn-outline-secondary">
                 <i class="bi bi-printer me-1"></i>Imprimer
             </button>
+            <?php endif; ?>
+
 
             <?php if ($est_admin && $cycle_choisi && $cycle_choisi['statut'] === 'actif'): ?>
                 <form method="POST" action="cycles.php" class="d-inline m-0" onsubmit="return confirm('Voulez-vous vraiment arrêter et clôturer ce cycle maintenant ?');">
