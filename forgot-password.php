@@ -38,8 +38,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $erreur = "Le nouveau mot de passe doit contenir au moins 6 caractères.";
             $etape = 'validation';
         } else {
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE reset_token = ? AND reset_expire_at > NOW() LIMIT 1");
-            $stmt->execute([$token_saisi]);
+            $maintenant = date('Y-m-d H:i:s', temps_actuel());
+            $stmt = $pdo->prepare("SELECT id FROM users WHERE reset_token = ? AND reset_expire_at > ? LIMIT 1");
+            $stmt->execute([$token_saisi, $maintenant]);
             $user = $stmt->fetch();
 
             if (!$user) {

@@ -32,14 +32,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $erreur = "Identifiants incorrects. Vérifiez votre nom d'utilisateur ou numéro de téléphone.";
         } elseif ($user['statut_membre'] !== 'actif') {
             $erreur = "Ce compte membre est actuellement inactif ou retiré de la tontine. Contactez votre secrétaire.";
-        } elseif (!empty($user['blocage_jusqua']) && strtotime($user['blocage_jusqua']) > time()) {
-            $minutes = (int)ceil((strtotime($user['blocage_jusqua']) - time()) / 60);
+        } elseif (!empty($user['blocage_jusqua']) && strtotime($user['blocage_jusqua']) > temps_actuel()) {
+            $minutes = (int)ceil((strtotime($user['blocage_jusqua']) - temps_actuel()) / 60);
             $erreur = "Compte temporairement bloqué par sécurité après 5 échecs. Réessayez dans {$minutes} minute(s).";
         } elseif (!password_verify($mot_de_passe, $user['password_hash'])) {
             // Incrémentation du compteur d'échecs
             $echecs = (int)$user['tentatives_echouees'] + 1;
             if ($echecs >= 5) {
-                $blocage = date('Y-m-d H:i:s', time() + 15 * 60);
+                $blocage = date('Y-m-d H:i:s', temps_actuel() + 15 * 60);
                 $upd = $pdo->prepare("UPDATE users SET tentatives_echouees = ?, blocage_jusqua = ? WHERE id = ?");
                 $upd->execute([$echecs, $blocage, $user['id']]);
                 $erreur = "5 tentatives échouées. Par mesure de sécurité, votre compte est bloqué pendant 15 minutes.";

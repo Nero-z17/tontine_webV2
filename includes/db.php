@@ -1,6 +1,8 @@
 <?php
 // includes/db.php — Connexion MySQL (InfinityFree en ligne ou WAMP en local)
 
+date_default_timezone_set('Africa/Douala');
+
 if (($_SERVER['HTTP_HOST'] ?? 'localhost') === 'localhost' || str_starts_with($_SERVER['HTTP_HOST'] ?? '', '127.0.0.1')) {
     // Configuration locale WAMP
     $host        = '127.0.0.1';
@@ -25,6 +27,7 @@ try {
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ]
     );
+    $pdo->exec("SET time_zone = '+01:00'");
 } catch (PDOException $e) {
     die("Erreur de connexion à la base de données.");
 }
