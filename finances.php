@@ -563,8 +563,17 @@ require_once __DIR__ . '/includes/navbar.php';
             <h1 class="h3 fw-bold mb-1">
                 <i class="bi bi-wallet2 text-primary me-2"></i><?= $est_admin ? 'Cotisations, Reçus & Caisse du Cycle' : 'Mes Cotisations, Reçus & Pénalités' ?>
             </h1>
+            <?php
+                $der_ech_fin = !empty($mes_seances) ? end($mes_seances)['date_echeance'] : ($cycle['date_fin'] ?? null);
+                $statut_fin_label = $cycle ? strtoupper($cycle['statut']) : '';
+                if ($cycle && $cycle['statut'] === 'actif' && !empty($der_ech_fin) && date_actuelle('Y-m-d') > $der_ech_fin) {
+                    $statut_fin_label = 'EN RÉGULARISATION';
+                } elseif ($cycle && $cycle['statut'] === 'termine') {
+                    $statut_fin_label = 'TERMINÉ';
+                }
+            ?>
             <p class="text-muted small mb-0">
-                <?= $cycle ? 'Cycle affiché : <strong>' . e($cycle['titre']) . '</strong> (' . strtoupper($cycle['statut']) . ')' : 'Aucun cycle actif' ?>
+                <?= $cycle ? 'Cycle affiché : <strong>' . e($cycle['titre']) . '</strong> (' . $statut_fin_label . ')' : 'Aucun cycle actif' ?>
             </p>
         </div>
 

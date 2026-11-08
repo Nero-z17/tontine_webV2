@@ -265,10 +265,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
     }
 }
 
-// 2. RÉCUPÉRATION DE TOUS LES CYCLES DE LA TONTINE
-$stmtCycles = $pdo->prepare("SELECT * FROM cycles WHERE tontine_id = ? ORDER BY (statut = 'actif') DESC, numero_cycle DESC");
+// 2. RÉCUPÉRATION DE TOUS LES CYCLES DE LA TONTINE AVEC DÉTECTION "EN RÉGULARISATION"
+$stmtCycles = $pdo->prepare("
+    SELECT c.*,
+           (SELECT MAX(co.date_echeance) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = c.id) AS derniere_echeance_cycle,
+           (SELECT COUNT(*) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = c.id AND co.montant_paye + 0.01 < co.montant_attendu) AS nb_cotis_impayees,
+           (SELECT COUNT(*) FROM penalties p INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id WHERE cm.cycle_id = c.id AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_attente
+    FROM cycles c
+    WHERE c.tontine_id = ?
+    ORDER BY (c.statut = 'actif') DESC, c.numero_cycle DESC
+");
 $stmtCycles->execute([$tontine_id]);
 $tous_cycles = $stmtCycles->fetchAll();
+
+$aujourdhui_cycle = date_actuelle('Y-m-d');
+foreach ($tous_cycles as &$c_item) {
+    $der_ech = $c_item['derniere_echeance_cycle'] ?? null;
+    $a_impayes = ((int)$c_item['nb_cotis_impayees'] > 0 || (int)$c_item['nb_pen_attente'] > 0);
+    if ($c_item['statut'] === 'actif' && !empty($der_ech) && $aujourdhui_cycle > $der_ech) {
+        if ($a_impayes) {
+            $c_item['statut_affiche'] = 'EN RÉGULARISATION';
+            $c_item['en_regularisation'] = true;
+        } else {
+            $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = ? WHERE id = ?")->execute([$aujourdhui_cycle, (int)$c_item['id']]);
+            $c_item['statut'] = 'termine';
+            $c_item['statut_affiche'] = 'TERMINÉ';
+            $c_item['en_regularisation'] = false;
+        }
+    } else {
+        $c_item['statut_affiche'] = ($c_item['statut'] === 'termine') ? 'TERMINÉ' : strtoupper($c_item['statut']);
+        $c_item['en_regularisation'] = false;
+    }
+}
+unset($c_item);
 
 $cycle_id_choisi = isset($_GET['cycle_id']) ? (int)$_GET['cycle_id'] : 0;
 $cycle_choisi    = null;
@@ -501,7 +530,7 @@ if ($cycle_choisi) {
                 $tot_ret_cycle += $ret_s;
                 $tot_net_cycle += $net_s;
 
-                $est_act    = ($cycle_choisi['statut'] === 'actif' && $ns === $seance_max_ouverte);
+                $est_act    = ($cycle_choisi['statut'] === 'actif' && $num_s === $seance_max_ouverte && date_actuelle('Y-m-d') <= $sb['date_echeance']);
                 $est_fermee = ($cycle_choisi['statut'] === 'actif' && $ns > $seance_max_ouverte);
                 $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
                 if ($pot_ok) {
@@ -906,7 +935,7 @@ if ($cycle_choisi) {
                 $ret_s = obtenir_retenue_sur_pot($pdo, $cid, (int)$sb['bouffeur_user_id'], $ns);
                 $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
 
-                $est_act    = ($cycle_choisi['statut'] === 'actif' && $ns === $seance_max_ouverte);
+                $est_act    = ($cycle_choisi['statut'] === 'actif' && $num_s === $seance_max_ouverte && date_actuelle('Y-m-d') <= $sb['date_echeance']);
                 $est_fermee = ($cycle_choisi['statut'] === 'actif' && $ns > $seance_max_ouverte);
                 $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
                 $st_lbl     = $pot_ok ? 'Pot complet' : ($est_fermee ? 'Verrouillee' : ($est_act ? 'En cours' : 'Regularisation'));
@@ -1086,7 +1115,7 @@ require_once __DIR__ . '/includes/navbar.php';
                     <select name="cycle_id" class="form-select form-select-sm fw-semibold" onchange="this.form.submit()" style="min-width: 230px;">
                         <?php foreach ($tous_cycles as $c): ?>
                             <option value="<?= (int)$c['id'] ?>" <?= ($cycle_choisi && (int)$c['id'] === (int)$cycle_choisi['id']) ? 'selected' : '' ?>>
-                                <?= e($c['titre']) ?> (<?= strtoupper($c['statut']) ?>)
+                                <?= e($c['titre']) ?> (<?= e($c['statut_affiche'] ?? strtoupper($c['statut'])) ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
@@ -1275,11 +1304,14 @@ require_once __DIR__ . '/includes/navbar.php';
                             <i class="bi bi-calendar3-range text-primary me-2"></i>Calendrier des Séances & Ordre des Bénéficiaires — <?= e($cycle_choisi['titre']) ?>
                         </h5>
                         <p class="text-muted small mb-0">
-                            Séance actuellement ouverte aux cotisations : <strong>Séance #<?= $seance_max_ouverte ?></strong>
-                            <?php if ($cycle_choisi['statut'] === 'termine'): ?>
-                                · <span class="badge bg-success">Cycle clôturé automatiquement</span>
-                            <?php endif; ?>
-                        </p>
+                         <?php if ($cycle_choisi['statut'] === 'termine'): ?>
+                             Statut du cycle : <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Terminé (toutes les séances, dettes et pénalités sont réglées)</span>
+                         <?php elseif (!empty($cycle_choisi['en_regularisation'])): ?>
+                             Statut du cycle : <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle-fill me-1"></i>En régularisation (dernière séance passée — dettes ou pénalités en attente)</span>
+                         <?php else: ?>
+                             Séance actuellement ouverte aux cotisations : <strong>Séance #<?= $seance_max_ouverte ?></strong> · <span class="badge bg-primary">Cycle actif</span>
+                         <?php endif; ?>
+                     </p>
                     </div>
                 </div>
 
@@ -1306,7 +1338,7 @@ require_once __DIR__ . '/includes/navbar.php';
                                 <?php
                                     $num_s      = (int)$sb['numero_seance'];
                                     $per_s      = formater_periode_seance($cycle_choisi['date_debut'], $num_s, $cycle_choisi['frequence'], $sb['date_echeance']);
-                                    $est_act    = ($cycle_choisi['statut'] === 'actif' && $num_s === $seance_max_ouverte);
+                                    $est_act    = ($cycle_choisi['statut'] === 'actif' && $num_s === $seance_max_ouverte && date_actuelle('Y-m-d') <= $sb['date_echeance']);
                                     $est_fermee = ($cycle_choisi['statut'] === 'actif' && $num_s > $seance_max_ouverte);
                                     $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
                                 ?>
