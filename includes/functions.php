@@ -199,7 +199,8 @@ function resynchroniser_pots_cycle(PDO $pdo, int $cycle_id): void {
 // 4. SYNCHRONISATION HORLOGE, PÉNALITÉS PROGRESSIVES, RETENUE SUR POT & CLÔTURE AUTO
 // ============================================================================
 function synchroniser_horloge_et_retards(PDO $pdo): void {
-    $ts = temps_actuel();
+    $ts         = temps_actuel();
+    $aujourdhui = date_actuelle('Y-m-d');
 
     // 1. Aligner l'horloge de la session MySQL (autorisé sur WAMP, ignoré proprement si refusé sur mutualisé)
     try {
@@ -209,28 +210,36 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
     }
 
     // 2. Si on a reculé le temps : remettre en 'en_attente' ou 'partiel' les cotisations futures
-    $pdo->exec("
+    $stmtResetFutur = $pdo->prepare("
         UPDATE contributions
         SET statut = CASE WHEN montant_paye > 0 THEN 'partiel' ELSE 'en_attente' END
         WHERE montant_paye < montant_attendu
-          AND date_echeance >= CURDATE()
+          AND date_echeance >= ?
           AND statut = 'en_retard'
     ");
+    $stmtResetFutur->execute([$aujourdhui]);
 
-    // 3. Si on a reculé le temps : supprimer les pénalités/majorations 'en_attente' ou 'annule' dont la séance est redevenue future
-    $pdo->exec("
-        DELETE p FROM penalties p
-        INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
-        INNER JOIN contributions co_seance
-            ON co_seance.cycle_member_id = cm.id AND co_seance.numero_seance = p.numero_seance
-        WHERE p.statut IN ('en_attente', 'annule')
-          AND p.type_operation = 'penalite'
-          AND co_seance.date_echeance >= CURDATE()
-    ");
+    // 3. Si on a reculé le temps : supprimer les pénalités/majorations 'en_attente' ou 'annule' dont la période est redevenue future
+    $stmtCyclesAll = $pdo->query("SELECT id, date_debut, frequence FROM cycles WHERE tirage_verrouille = 1");
+    foreach (($stmtCyclesAll ? $stmtCyclesAll->fetchAll() : []) as $c_del) {
+        $stmtPenDel = $pdo->prepare("
+            SELECT p.id, p.numero_seance
+            FROM penalties p
+            INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
+            WHERE cm.cycle_id = ? AND p.statut IN ('en_attente', 'annule') AND p.type_operation = 'penalite'
+        ");
+        $stmtPenDel->execute([(int)$c_del['id']]);
+        foreach ($stmtPenDel->fetchAll() as $p_row) {
+            $ech_num = calculer_echeance_seance($c_del['date_debut'], (int)$p_row['numero_seance'], $c_del['frequence']);
+            if ($ech_num >= $aujourdhui) {
+                $pdo->prepare("DELETE FROM penalties WHERE id = ?")->execute([(int)$p_row['id']]);
+            }
+        }
+    }
 
     // 4. Auto-compensation de la propre part du bouffeur sur les séances ouvertes
     $stmtCyclesActifs = $pdo->query("
-        SELECT c.id, c.tontine_id, c.statut, c.montant_penalite_retard, t.admin_id
+        SELECT c.id, c.tontine_id, c.statut, c.date_debut, c.frequence, c.montant_penalite_retard, t.admin_id
         FROM cycles c
         INNER JOIN tontines t ON t.id = c.tontine_id
         WHERE c.statut IN ('actif', 'termine') AND c.tirage_verrouille = 1
@@ -241,7 +250,6 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
         $cid = (int)$cyc['id'];
         $max_ouverte = obtenir_seance_ouverte_max($pdo, $cid);
 
-        // Sur un cycle actif, auto-compenser la propre part du bouffeur jusqu'à la séance ouverte
         if ($cyc['statut'] === 'actif') {
             $stmtAutoSelf = $pdo->prepare("
                 SELECT co.id AS contribution_id,
@@ -292,18 +300,17 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
     }
 
     // 5. Passer en 'en_retard' les cotisations échues non soldées (hors bouffeur de la séance)
-    $pdo->exec("
+    $stmtMarkLate = $pdo->prepare("
         UPDATE contributions
         SET statut = 'en_retard'
         WHERE montant_paye < montant_attendu
           AND cycle_member_id != beneficiaire_cycle_member_id
-          AND date_echeance < CURDATE()
+          AND date_echeance < ?
           AND statut != 'en_retard'
     ");
+    $stmtMarkLate->execute([$aujourdhui]);
 
-    // 6. POINTS 7 & 8 : GÉNÉRATION DES PÉNALITÉS PAR SÉANCE
-    //    Important : $stmtCheckPenSeance cherche toute ligne (y compris statut = 'annule' supprimée par l'admin)
-    //    pour ne JAMAIS recréer une pénalité que l'administrateur a supprimée !
+    // 6. POINTS 7 & 8 : GÉNÉRATION DES PÉNALITÉS PAR SÉANCE (Y COMPRIS APRÈS LA DERNIÈRE SÉANCE)
     $stmtCheckPenSeance = $pdo->prepare("
         SELECT id FROM penalties
         WHERE contribution_id = ? AND numero_seance = ? AND type_operation = 'penalite'
@@ -327,65 +334,95 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             continue;
         }
 
-        $stmtSeancesEchues = $pdo->prepare("
+        // Récupérer toutes les séances du cycle
+        $stmtToutesS = $pdo->prepare("
             SELECT co.numero_seance, MIN(co.date_echeance) AS date_echeance
             FROM contributions co
             INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
             WHERE cm.cycle_id = ?
             GROUP BY co.numero_seance
-            HAVING MIN(co.date_echeance) < CURDATE()
             ORDER BY co.numero_seance ASC
         ");
-        $stmtSeancesEchues->execute([$cid]);
-        $seances_echues = $stmtSeancesEchues->fetchAll();
+        $stmtToutesS->execute([$cid]);
+        $toutes_seances_cyc = $stmtToutesS->fetchAll();
+        if (empty($toutes_seances_cyc)) {
+            continue;
+        }
+
+        $nb_seances_cyc = count($toutes_seances_cyc);
+        $seances_echues = [];
+        foreach ($toutes_seances_cyc as $tsc) {
+            if ($tsc['date_echeance'] < $aujourdhui) {
+                $seances_echues[] = [
+                    'numero_seance' => (int)$tsc['numero_seance'],
+                    'date_echeance' => $tsc['date_echeance']
+                ];
+            }
+        }
+
+        // Si même après la dernière séance (#N) le temps continue d'avancer et qu'il reste des impayés,
+        // on continue d'ajouter les périodes suivantes (#N+1, #N+2...) pour que les majorations ne s'arrêtent jamais !
+        for ($k_extra = $nb_seances_cyc + 1; $k_extra <= $nb_seances_cyc + 36; $k_extra++) {
+            $ech_extra = calculer_echeance_seance($cyc['date_debut'], $k_extra, $cyc['frequence']);
+            if ($ech_extra < $aujourdhui) {
+                $seances_echues[] = [
+                    'numero_seance' => $k_extra,
+                    'date_echeance' => $ech_extra
+                ];
+            } else {
+                break;
+            }
+        }
 
         foreach ($seances_echues as $se) {
             $k          = (int)$se['numero_seance'];
             $date_ech_k = $se['date_echeance'];
 
-            // A) Pénalité initiale sur les cotisations impayées de la séance K elle-même
-            $stmtImpK = $pdo->prepare("
-                SELECT co.id AS contribution_id, co.cycle_member_id, co.montant_attendu, co.montant_paye
-                FROM contributions co
-                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
-                WHERE cm.cycle_id = ?
-                  AND co.numero_seance = ?
-                  AND co.cycle_member_id != co.beneficiaire_cycle_member_id
-                  AND co.montant_paye < co.montant_attendu
-            ");
-            $stmtImpK->execute([$cid, $k]);
+            // A) Pénalité initiale sur les cotisations impayées de la séance K elle-même (uniquement pour K <= nb_seances_cyc)
+            if ($k <= $nb_seances_cyc) {
+                $stmtImpK = $pdo->prepare("
+                    SELECT co.id AS contribution_id, co.cycle_member_id, co.montant_attendu, co.montant_paye
+                    FROM contributions co
+                    INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                    WHERE cm.cycle_id = ?
+                      AND co.numero_seance = ?
+                      AND co.cycle_member_id != co.beneficiaire_cycle_member_id
+                      AND co.montant_paye < co.montant_attendu
+                ");
+                $stmtImpK->execute([$cid, $k]);
 
-            foreach ($stmtImpK->fetchAll() as $imp) {
-                $stmtCheckPenSeance->execute([(int)$imp['contribution_id'], $k]);
-                if (!$stmtCheckPenSeance->fetchColumn()) {
-                    $paye_actuel = (float)$imp['montant_paye'];
-                    if ($paye_actuel <= 0) {
-                        $montant_pen = $p_non_cot;
-                        $motif_pen   = sprintf(
-                            'Séance #%d : Non-cotisation à l\'échéance du %s (taux double)',
+                foreach ($stmtImpK->fetchAll() as $imp) {
+                    $stmtCheckPenSeance->execute([(int)$imp['contribution_id'], $k]);
+                    if (!$stmtCheckPenSeance->fetchColumn()) {
+                        $paye_actuel = (float)$imp['montant_paye'];
+                        if ($paye_actuel <= 0) {
+                            $montant_pen = $p_non_cot;
+                            $motif_pen   = sprintf(
+                                'Séance #%d : Non-cotisation à l\'échéance du %s (taux double)',
+                                $k,
+                                date('d/m/Y', strtotime($date_ech_k))
+                            );
+                        } else {
+                            $montant_pen = $p_partiel;
+                            $motif_pen   = sprintf(
+                                'Séance #%d : Cotisation partielle en retard (échéance du %s)',
+                                $k,
+                                date('d/m/Y', strtotime($date_ech_k))
+                            );
+                        }
+                        $stmtInsPenSeance->execute([
+                            (int)$imp['cycle_member_id'],
+                            (int)$imp['contribution_id'],
                             $k,
-                            date('d/m/Y', strtotime($date_ech_k))
-                        );
-                    } else {
-                        $montant_pen = $p_partiel;
-                        $motif_pen   = sprintf(
-                            'Séance #%d : Cotisation partielle en retard (échéance du %s)',
-                            $k,
-                            date('d/m/Y', strtotime($date_ech_k))
-                        );
+                            $montant_pen,
+                            $motif_pen,
+                            $admin_id
+                        ]);
                     }
-                    $stmtInsPenSeance->execute([
-                        (int)$imp['cycle_member_id'],
-                        (int)$imp['contribution_id'],
-                        $k,
-                        $montant_pen,
-                        $motif_pen,
-                        $admin_id
-                    ]);
                 }
             }
 
-            // B) Escalade / Majoration à la fin de la séance K (K > 1) pour les anciennes séances S < K non soldées
+            // B) Escalade / Majoration à la fin de la période K (K > 1) pour toutes les séances S < K non soldées
             if ($k > 1) {
                 $stmtAncNonSoldes = $pdo->prepare("
                     SELECT DISTINCT co.id AS contribution_id, co.cycle_member_id, co.numero_seance AS seance_origine
@@ -448,11 +485,12 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $bf_rang    = (int)$bf['rang_beneficiaire'];
             $bf_canal   = $bf['canal_paiement'] ?: 'momo';
 
-            // Somme totale collectée sur le pot de ce bouffeur (y compris sa part auto-compensée dès l'ouverture de sa séance)
+            // Somme réellement versée par les AUTRES membres (hors auto-compensation du bouffeur lui-même)
             $stmtPotTotal = $pdo->prepare("
                 SELECT COALESCE(SUM(montant_paye), 0)
                 FROM contributions
                 WHERE beneficiaire_cycle_member_id = ?
+                  AND cycle_member_id != beneficiaire_cycle_member_id
             ");
             $stmtPotTotal->execute([$bf_cm_id]);
             $pot_total_actuel = (float)$stmtPotTotal->fetchColumn();

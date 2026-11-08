@@ -63,12 +63,12 @@ if ($est_connecte && isset($pdo) && $pdo instanceof PDO && $tontine_id_nav > 0) 
         FROM contributions co
         INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
         INNER JOIN cycles c ON c.id = cm.cycle_id
-        WHERE cm.user_id = ? AND c.tontine_id = ? AND c.statut IN ('actif', 'termine')
+        WHERE cm.user_id = ? AND c.tontine_id = ? AND c.statut = 'actif'
           AND co.cycle_member_id != co.beneficiaire_cycle_member_id
-          AND co.montant_paye < co.montant_attendu
-          AND co.date_echeance < CURDATE()
+          AND (co.montant_attendu - co.montant_paye) > 0.01
+          AND co.date_echeance < ?
     ");
-    $stmtRetNav->execute([$user_id_nav, $tontine_id_nav]);
+    $stmtRetNav->execute([$user_id_nav, $tontine_id_nav, date_actuelle('Y-m-d')]);
     $mes_retards_nav = (int)$stmtRetNav->fetchColumn();
     if ($mes_retards_nav > 0) {
         $liste_alertes_top[] = [
