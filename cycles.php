@@ -328,21 +328,736 @@ if ($cycle_choisi) {
     }
     $total_reliquat_cycle = max(0.0, $total_attendu_cycle - $total_collecte_cycle);
 
-    // Point 1 : Seul l'admin charge le détail de ce que chaque membre a versé par séance
-    if ($est_admin) {
+    // Détail des cotisations par séance (chargé pour l'Admin et pour l'export officiel PDF / Excel)
+    $mode_export = $_GET['export'] ?? '';
+    if ($est_admin || in_array($mode_export, ['excel', 'pdf'], true)) {
         $stmtDet = $pdo->prepare("
-            SELECT c.numero_seance, c.montant_attendu, c.montant_paye, c.statut,
+            SELECT c.id AS contribution_id, c.numero_seance, c.date_echeance,
+                   c.montant_attendu, c.montant_paye, c.statut,
                    (c.cycle_member_id = c.beneficiaire_cycle_member_id) AS est_bouffeur,
-                   u.nom_complet
+                   u.nom_complet, u.telephone, u.canal_paiement, u.telephone_paiement,
+                   (SELECT p.reference_paiement FROM payments p WHERE p.contribution_id = c.id ORDER BY p.id DESC LIMIT 1) AS derniere_ref
             FROM contributions c
             JOIN cycle_members cm ON cm.id = c.cycle_member_id
             JOIN users u ON u.id = cm.user_id
             WHERE cm.cycle_id = ?
-            ORDER BY c.numero_seance ASC, (c.statut = 'paye') DESC, u.nom_complet ASC
+            ORDER BY c.numero_seance ASC, est_bouffeur DESC, (c.statut = 'paye') DESC, u.nom_complet ASC
         ");
         $stmtDet->execute([$cid]);
         foreach ($stmtDet->fetchAll() as $d) {
             $cotisants_par_seance[(int)$d['numero_seance']][] = $d;
+        }
+    }
+
+    // Export officiel Excel (.xlsx) ou PDF (.pdf)
+    if (in_array($mode_export, ['excel', 'pdf'], true)) {
+        $stmtTontineInfo = $pdo->prepare("SELECT nom, ville, code_tontine, devise FROM tontines WHERE id = ? LIMIT 1");
+        $stmtTontineInfo->execute([$tontine_id]);
+        $tontine_info = $stmtTontineInfo->fetch() ?: ['nom' => 'Ma Tontine', 'ville' => 'Douala', 'code_tontine' => 'TON', 'devise' => 'FCFA'];
+
+        $stmtPenExp = $pdo->prepare("
+            SELECT p.*, u.nom_complet, u.telephone
+            FROM penalties p
+            JOIN cycle_members cm ON cm.id = p.cycle_member_id
+            JOIN users u ON u.id = cm.user_id
+            WHERE cm.cycle_id = ?
+            ORDER BY p.numero_seance ASC, p.date_operation ASC, p.id ASC
+        ");
+        $stmtPenExp->execute([$cid]);
+        $penalites_export = $stmtPenExp->fetchAll();
+
+        $slug_cycle = preg_replace('/[^A-Za-z0-9_-]+/', '_', $cycle_choisi['titre']);
+        $slug_cycle = trim($slug_cycle, '_') ?: ('Cycle_' . (int)$cycle_choisi['numero_cycle']);
+
+        // ====================================================================
+        // EXPORT 1 : VRAI FICHIER EXCEL PROFESSIONNEL (.XLSX MULTI-FEUILLES)
+        // ====================================================================
+        if ($mode_export === 'excel') {
+            $xml_escape = static function ($v): string {
+                return htmlspecialchars((string)$v, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+            };
+            $col_letter = static function (int $c): string {
+                $s = '';
+                while ($c > 0) {
+                    $m = ($c - 1) % 26;
+                    $s = chr(65 + $m) . $s;
+                    $c = (int)(($c - $m) / 26);
+                }
+                return $s;
+            };
+            $build_sheet_xml = static function (array $rows, array $col_widths, array $merges = []) use ($xml_escape, $col_letter): string {
+                $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' . "\n";
+                $xml .= '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+                $xml .= '<sheetViews><sheetView workbookViewId="0" showGridLines="1"/></sheetViews>';
+                $xml .= '<cols>';
+                foreach ($col_widths as $idx => $w) {
+                    $c_num = $idx + 1;
+                    $xml .= '<col min="' . $c_num . '" max="' . $c_num . '" width="' . $w . '" customWidth="1"/>';
+                }
+                $xml .= '</cols><sheetData>';
+                foreach ($rows as $r_idx => $r_info) {
+                    $r_num = $r_idx + 1;
+                    $ht = isset($r_info['height']) ? ' ht="' . $r_info['height'] . '" customHeight="1"' : ' ht="20" customHeight="1"';
+                    $xml .= '<row r="' . $r_num . '"' . $ht . '>';
+                    foreach ($r_info['cells'] as $c_idx => $cell) {
+                        $ref = $col_letter($c_idx + 1) . $r_num;
+                        $val = $cell['v'] ?? '';
+                        $st  = (int)($cell['s'] ?? 0);
+                        $tp  = $cell['t'] ?? 'str';
+                        if ($tp === 'num' && is_numeric($val)) {
+                            $xml .= '<c r="' . $ref . '" s="' . $st . '"><v>' . $val . '</v></c>';
+                        } else {
+                            $xml .= '<c r="' . $ref . '" s="' . $st . '" t="inlineStr"><is><t xml:space="preserve">' . $xml_escape($val) . '</t></is></c>';
+                        }
+                    }
+                    $xml .= '</row>';
+                }
+                $xml .= '</sheetData>';
+                if (!empty($merges)) {
+                    $xml .= '<mergeCells count="' . count($merges) . '">';
+                    foreach ($merges as $m_ref) {
+                        $xml .= '<mergeCell ref="' . $m_ref . '"/>';
+                    }
+                    $xml .= '</mergeCells>';
+                }
+                $xml .= '<pageSetup orientation="landscape" paperSize="9" fitToWidth="1" fitToHeight="0"/>';
+                $xml .= '</worksheet>';
+                return $xml;
+            };
+
+            // Styles OpenXML :
+            // 0 = Normal, 1 = Bandeau Titre Principal (Vert Forêt #0B241C, Blanc Gras 13pt),
+            // 2 = Sous-titre bandeau (Vert Menthe #E6F4EA, Vert Foncé Gras 10pt),
+            // 3 = Bandeau Section / Séance (Émeraude #107C41, Blanc Gras 11pt),
+            // 4 = En-tête Tableau (Ardoise #1E293B, Blanc Gras 10pt centré),
+            // 5 = Cellule Texte Standard avec bordure,
+            // 6 = Cellule Texte Gras avec bordure,
+            // 7 = Cellule Montant FCFA (#,##0 "FCFA") avec bordure,
+            // 8 = Cellule Montant FCFA Gras Total (Fond #E6F4EA) avec bordure,
+            // 9 = Cellule Texte Total Gras (Fond #E6F4EA) avec bordure,
+            // 10 = Cellule Statut Centrée Gras avec bordure,
+            // 11 = Cellule Clé KPI (Fond #F1F5F9, Gras) avec bordure
+            $montant_cotis_exp = (float)$cycle_choisi['montant_cotisation'];
+            $pen_part_exp      = (float)$cycle_choisi['montant_penalite_retard'];
+            $pen_double_exp    = round($pen_part_exp * 2, 2);
+            $pct_part_exp      = $montant_cotis_exp > 0 ? round(($pen_part_exp / $montant_cotis_exp) * 100, 1) : 0;
+            $pct_double_exp    = round($pct_part_exp * 2, 1);
+            $solde_caisse_exp  = (float)($cycle_choisi['solde_caisse_reserve'] ?? 0);
+
+            // ---------------- FEUILLE 1 : SYNTHÈSE & CALENDRIER DES SÉANCES ----------------
+            $r1 = [];
+            $m1 = ['A1:J1', 'A2:J2', 'A4:J4', 'A11:J11'];
+            $r1[] = ['height' => 28, 'cells' => array_replace(array_fill(0, 10, ['v' => '', 's' => 1]), [0 => ['v' => 'BILAN OFFICIEL DU CYCLE — ' . mb_strtoupper($tontine_info['nom']) . ' (' . $tontine_info['ville'] . ')', 's' => 1]])];
+            $r1[] = ['height' => 22, 'cells' => array_replace(array_fill(0, 10, ['v' => '', 's' => 2]), [0 => ['v' => 'Cycle : ' . $cycle_choisi['titre'] . '  |  Statut : ' . strtoupper($cycle_choisi['statut']) . '  |  Date d\'édition : ' . date_actuelle('d/m/Y H:i'), 's' => 2]])];
+            $r1[] = ['height' => 12, 'cells' => []];
+            $r1[] = ['height' => 24, 'cells' => array_replace(array_fill(0, 10, ['v' => '', 's' => 3]), [0 => ['v' => '1. PARAMÈTRES GÉNÉRAUX & SYNTHÈSE FINANCIÈRE DU CYCLE', 's' => 3]])];
+
+            $kpi_rows = [
+                ['Titre du Cycle', $cycle_choisi['titre'], 'Statut du Cycle', strtoupper($cycle_choisi['statut']), 'Fréquence', ucfirst($cycle_choisi['frequence'])],
+                ['Cotisation / Séance', $montant_cotis_exp, 'Date de Début', date('d/m/Y', strtotime($cycle_choisi['date_debut'])), 'Date de Fin', !empty($cycle_choisi['date_fin']) ? date('d/m/Y', strtotime($cycle_choisi['date_fin'])) : 'En cours'],
+                ['Pénalité Partielle (1x)', $pen_part_exp . ' FCFA (' . $pct_part_exp . ' %)', 'Pénalité Non-Cotisation (2x)', $pen_double_exp . ' FCFA (' . $pct_double_exp . ' %)', 'Séance Actuelle', 'Séance #' . $seance_max_ouverte],
+                ['Total Attendu (Cycle)', ['v' => $total_attendu_cycle, 't' => 'num', 's' => 7], 'Total Collecté (Cycle)', ['v' => $total_collecte_cycle, 't' => 'num', 's' => 7], 'Reliquat à Recouvrer', ['v' => $total_reliquat_cycle, 't' => 'num', 's' => 7]],
+                ['Solde Caisse Réserve (Cycle)', ['v' => $solde_caisse_exp, 't' => 'num', 's' => 8], 'Nombre de Séances', count($seances_bilan) . ' séances', 'Code Tontine', $tontine_info['code_tontine']]
+            ];
+            foreach ($kpi_rows as $kr) {
+                $cells = [];
+                for ($i = 0; $i < 6; $i++) {
+                    $item = $kr[$i];
+                    if ($i % 2 === 0) {
+                        $cells[] = ['v' => $item, 's' => 11];
+                    } elseif (is_array($item)) {
+                        $cells[] = $item;
+                    } elseif (is_numeric($item)) {
+                        $cells[] = ['v' => $item, 't' => 'num', 's' => 7];
+                    } else {
+                        $cells[] = ['v' => (string)$item, 's' => 6];
+                    }
+                }
+                $r1[] = ['height' => 21, 'cells' => $cells];
+            }
+
+            $r1[] = ['height' => 14, 'cells' => []];
+            $r1[] = ['height' => 24, 'cells' => array_replace(array_fill(0, 10, ['v' => '', 's' => 3]), [0 => ['v' => '2. CALENDRIER DES SÉANCES & ORDRE DES BÉNÉFICIAIRES (BOUFFEURS)', 's' => 3]])];
+            $r1[] = ['height' => 24, 'cells' => [
+                ['v' => 'Séance', 's' => 4],
+                ['v' => 'Période de la Séance', 's' => 4],
+                ['v' => 'Date Échéance', 's' => 4],
+                ['v' => 'Bénéficiaire (Bouffeur)', 's' => 4],
+                ['v' => 'Canal & N° Paiement', 's' => 4],
+                ['v' => 'Pot Attendu (FCFA)', 's' => 4],
+                ['v' => 'Pot Collecté (FCFA)', 's' => 4],
+                ['v' => 'Retenue sur Pot (FCFA)', 's' => 4],
+                ['v' => 'Net Versé au Bouffeur (FCFA)', 's' => 4],
+                ['v' => 'Statut de la Séance', 's' => 4],
+            ]];
+
+            $tot_ret_cycle = 0.0;
+            $tot_net_cycle = 0.0;
+            foreach ($seances_bilan as $sb) {
+                $ns    = (int)$sb['numero_seance'];
+                $per_s = formater_periode_seance($cycle_choisi['date_debut'], $ns, $cycle_choisi['frequence'], $sb['date_echeance']);
+                $ret_s = obtenir_retenue_sur_pot($pdo, $cid, (int)$sb['bouffeur_user_id'], $ns);
+                $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
+                $tot_ret_cycle += $ret_s;
+                $tot_net_cycle += $net_s;
+
+                $est_act    = ($cycle_choisi['statut'] === 'actif' && $ns === $seance_max_ouverte);
+                $est_fermee = ($cycle_choisi['statut'] === 'actif' && $ns > $seance_max_ouverte);
+                $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
+                if ($pot_ok) {
+                    $st_lbl = 'Pot complet (100%)';
+                } elseif ($est_fermee) {
+                    $st_lbl = 'Verrouillée';
+                } elseif ($est_act) {
+                    $st_lbl = 'Séance en cours';
+                } else {
+                    $st_lbl = 'En régularisation';
+                }
+
+                $r1[] = ['height' => 20, 'cells' => [
+                    ['v' => 'Séance #' . $ns, 's' => 6],
+                    ['v' => $per_s, 's' => 5],
+                    ['v' => date('d/m/Y', strtotime($sb['date_echeance'])), 's' => 10],
+                    ['v' => $sb['nom_bouffeur'], 's' => 6],
+                    ['v' => strtoupper($sb['canal_paiement']) . ' : ' . $sb['telephone_paiement'], 's' => 5],
+                    ['v' => (float)$sb['montant_pot_attendu'], 't' => 'num', 's' => 7],
+                    ['v' => (float)$sb['total_seance_paye'], 't' => 'num', 's' => 7],
+                    ['v' => $ret_s, 't' => 'num', 's' => 7],
+                    ['v' => $net_s, 't' => 'num', 's' => 7],
+                    ['v' => $st_lbl . ' (' . (int)$sb['nb_payes'] . '/' . (int)$sb['nb_cotisations'] . ')', 's' => 10],
+                ]];
+            }
+            $r1[] = ['height' => 23, 'cells' => [
+                ['v' => 'TOTAL CYCLE', 's' => 9],
+                ['v' => count($seances_bilan) . ' séances', 's' => 9],
+                ['v' => '', 's' => 9],
+                ['v' => '', 's' => 9],
+                ['v' => 'Cumul Global :', 's' => 9],
+                ['v' => $total_attendu_cycle, 't' => 'num', 's' => 8],
+                ['v' => $total_collecte_cycle, 't' => 'num', 's' => 8],
+                ['v' => $tot_ret_cycle, 't' => 'num', 's' => 8],
+                ['v' => $tot_net_cycle, 't' => 'num', 's' => 8],
+                ['v' => 'Reliquat : ' . number_format($total_reliquat_cycle, 0, ',', ' ') . ' FCFA', 's' => 9],
+            ]];
+
+            // ---------------- FEUILLE 2 : DÉTAIL COMPLET SÉANCE PAR SÉANCE ----------------
+            $r2 = [];
+            $m2 = ['A1:I1', 'A2:I2'];
+            $r2[] = ['height' => 28, 'cells' => array_replace(array_fill(0, 9, ['v' => '', 's' => 1]), [0 => ['v' => 'DÉTAIL DES COTISATIONS SÉANCE PAR SÉANCE — ' . mb_strtoupper($cycle_choisi['titre']), 's' => 1]])];
+            $r2[] = ['height' => 22, 'cells' => array_replace(array_fill(0, 9, ['v' => '', 's' => 2]), [0 => ['v' => 'Tontine : ' . $tontine_info['nom'] . '  |  Chaque séance liste tous les membres participants, leurs versements et leurs reliquats', 's' => 2]])];
+
+            foreach ($seances_bilan as $sb) {
+                $ns    = (int)$sb['numero_seance'];
+                $per_s = formater_periode_seance($cycle_choisi['date_debut'], $ns, $cycle_choisi['frequence'], $sb['date_echeance']);
+                $ret_s = obtenir_retenue_sur_pot($pdo, $cid, (int)$sb['bouffeur_user_id'], $ns);
+                $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
+
+                $r2[] = ['height' => 12, 'cells' => []];
+                $row_hdr_idx = count($r2) + 1;
+                $m2[] = 'A' . $row_hdr_idx . ':I' . $row_hdr_idx;
+                $info_ret_txt = $ret_s > 0 ? ('  |  Retenue sur pot : -' . number_format($ret_s, 0, ',', ' ') . ' FCFA (Net versé : ' . number_format($net_s, 0, ',', ' ') . ' FCFA)') : '';
+                $r2[] = ['height' => 24, 'cells' => array_replace(array_fill(0, 9, ['v' => '', 's' => 3]), [0 => [
+                    'v' => 'SÉANCE #' . $ns . ' (' . $per_s . ')  —  BOUFFEUR : ' . mb_strtoupper($sb['nom_bouffeur']) . ' (' . strtoupper($sb['canal_paiement']) . ' : ' . $sb['telephone_paiement'] . ')' . $info_ret_txt,
+                    's' => 3
+                ]])];
+
+                $r2[] = ['height' => 22, 'cells' => [
+                    ['v' => 'N°', 's' => 4],
+                    ['v' => 'Membre Participant', 's' => 4],
+                    ['v' => 'Téléphone', 's' => 4],
+                    ['v' => 'Canal & N° Paiement', 's' => 4],
+                    ['v' => 'Rôle dans la Séance', 's' => 4],
+                    ['v' => 'Montant Attendu (FCFA)', 's' => 4],
+                    ['v' => 'Montant Payé (FCFA)', 's' => 4],
+                    ['v' => 'Reste à Payer (FCFA)', 's' => 4],
+                    ['v' => 'Statut / Référence', 's' => 4],
+                ]];
+
+                $liste_c = $cotisants_par_seance[$ns] ?? [];
+                $rang_ligne = 1;
+                $st_att = 0.0;
+                $st_pay = 0.0;
+                $st_res = 0.0;
+                foreach ($liste_c as $dc) {
+                    $att = (float)$dc['montant_attendu'];
+                    $pay = (float)$dc['montant_paye'];
+                    $res = max(0.0, $att - $pay);
+                    $st_att += $att;
+                    $st_pay += $pay;
+                    $st_res += $res;
+
+                    $est_b = ((int)$dc['est_bouffeur'] === 1);
+                    if ($est_b && $dc['statut'] === 'paye') {
+                        $statut_txt = 'Sur Pot (Auto-compensé)';
+                    } elseif ($dc['statut'] === 'paye') {
+                        $statut_txt = 'Payé' . (!empty($dc['derniere_ref']) ? ' (' . $dc['derniere_ref'] . ')' : '');
+                    } elseif ($dc['statut'] === 'en_retard') {
+                        $statut_txt = 'En retard';
+                    } elseif ($dc['statut'] === 'partiel') {
+                        $statut_txt = 'Partiel';
+                    } else {
+                        $statut_txt = 'En attente';
+                    }
+
+                    $r2[] = ['height' => 20, 'cells' => [
+                        ['v' => $rang_ligne++, 't' => 'num', 's' => 10],
+                        ['v' => $dc['nom_complet'], 's' => $est_b ? 6 : 5],
+                        ['v' => $dc['telephone'] ?? '', 's' => 5],
+                        ['v' => strtoupper($dc['canal_paiement'] ?? 'momo') . ' : ' . ($dc['telephone_paiement'] ?? ''), 's' => 5],
+                        ['v' => $est_b ? 'Bénéficiaire (Bouffeur)' : 'Cotisant', 's' => $est_b ? 6 : 5],
+                        ['v' => $att, 't' => 'num', 's' => 7],
+                        ['v' => $pay, 't' => 'num', 's' => 7],
+                        ['v' => $res, 't' => 'num', 's' => 7],
+                        ['v' => $statut_txt, 's' => 10],
+                    ]];
+                }
+
+                $r2[] = ['height' => 22, 'cells' => [
+                    ['v' => '', 's' => 9],
+                    ['v' => 'SOUS-TOTAL SÉANCE #' . $ns, 's' => 9],
+                    ['v' => '', 's' => 9],
+                    ['v' => '', 's' => 9],
+                    ['v' => (int)$sb['nb_payes'] . '/' . (int)$sb['nb_cotisations'] . ' soldés', 's' => 9],
+                    ['v' => $st_att, 't' => 'num', 's' => 8],
+                    ['v' => $st_pay, 't' => 'num', 's' => 8],
+                    ['v' => $st_res, 't' => 'num', 's' => 8],
+                    ['v' => $ret_s > 0 ? ('Net Bouffeur : ' . number_format($net_s, 0, ',', ' ') . ' FCFA') : 'Pot reversé : 100%', 's' => 9],
+                ]];
+            }
+
+            // ---------------- FEUILLE 3 : CAISSE DE RÉSERVE & PÉNALITÉS ----------------
+            $r3 = [];
+            $m3 = ['A1:H1', 'A2:H2', 'A4:H4'];
+            $r3[] = ['height' => 28, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 1]), [0 => ['v' => 'CAISSE DE RÉSERVE, PÉNALITÉS & BONUS — ' . mb_strtoupper($cycle_choisi['titre']), 's' => 1]])];
+            $r3[] = ['height' => 22, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 2]), [0 => ['v' => 'Solde actuel de la Caisse de réserve du cycle : ' . number_format($solde_caisse_exp, 0, ',', ' ') . ' FCFA', 's' => 2]])];
+            $r3[] = ['height' => 12, 'cells' => []];
+            $r3[] = ['height' => 24, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 3]), [0 => ['v' => 'HISTORIQUE DÉTAILLÉ DES OPÉRATIONS DE CAISSE PAR SÉANCE', 's' => 3]])];
+            $r3[] = ['height' => 22, 'cells' => [
+                ['v' => 'Séance', 's' => 4],
+                ['v' => 'Membre Concerné', 's' => 4],
+                ['v' => 'Téléphone', 's' => 4],
+                ['v' => 'Type d\'Opération', 's' => 4],
+                ['v' => 'Motif Détaillé', 's' => 4],
+                ['v' => 'Montant (FCFA)', 's' => 4],
+                ['v' => 'Statut', 's' => 4],
+                ['v' => 'Date Opération / Règlement', 's' => 4],
+            ]];
+
+            $tot_pen_regle = 0.0;
+            $tot_pen_att   = 0.0;
+            if (empty($penalites_export)) {
+                $r3[] = ['height' => 22, 'cells' => [
+                    ['v' => '-', 's' => 10],
+                    ['v' => 'Aucune pénalité ni bonus enregistré sur ce cycle.', 's' => 5],
+                    ['v' => '', 's' => 5], ['v' => '', 's' => 5], ['v' => '', 's' => 5],
+                    ['v' => 0, 't' => 'num', 's' => 7], ['v' => '-', 's' => 10], ['v' => '-', 's' => 10]
+                ]];
+            } else {
+                foreach ($penalites_export as $pe) {
+                    $mt_p = (float)$pe['montant'];
+                    if ($pe['statut'] === 'regle') {
+                        $tot_pen_regle += $mt_p;
+                        $st_p = 'Réglé (En caisse)';
+                    } elseif ($pe['statut'] === 'annule') {
+                        $st_p = 'Annulé par l\'Admin';
+                    } else {
+                        $tot_pen_att += $mt_p;
+                        $st_p = 'En attente';
+                    }
+                    $dt_op = !empty($pe['date_operation']) ? date('d/m/Y', strtotime($pe['date_operation'])) : '-';
+                    $dt_rg = !empty($pe['date_reglement']) ? (' -> Réglé le ' . date('d/m/Y', strtotime($pe['date_reglement']))) : '';
+                    $r3[] = ['height' => 20, 'cells' => [
+                        ['v' => 'Séance #' . (int)($pe['numero_seance'] ?? 1), 's' => 6],
+                        ['v' => $pe['nom_complet'], 's' => 6],
+                        ['v' => $pe['telephone'], 's' => 5],
+                        ['v' => $pe['type_operation'] === 'bonus' ? 'Bonus volontaire' : 'Pénalité de retard', 's' => 10],
+                        ['v' => $pe['motif'], 's' => 5],
+                        ['v' => $mt_p, 't' => 'num', 's' => 7],
+                        ['v' => $st_p, 's' => 10],
+                        ['v' => $dt_op . $dt_rg, 's' => 10],
+                    ]];
+                }
+            }
+            $r3[] = ['height' => 23, 'cells' => [
+                ['v' => 'BILAN CAISSE', 's' => 9],
+                ['v' => 'Solde Réglé en Caisse :', 's' => 9],
+                ['v' => $solde_caisse_exp, 't' => 'num', 's' => 8],
+                ['v' => 'Total En Attente :', 's' => 9],
+                ['v' => $tot_pen_att, 't' => 'num', 's' => 8],
+                ['v' => $tot_pen_regle, 't' => 'num', 's' => 8],
+                ['v' => 'Encaissé', 's' => 9],
+                ['v' => '', 's' => 9],
+            ]];
+
+            $styles_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <numFmts count="1">
+        <numFmt numFmtId="164" formatCode="#,##0\ &quot;FCFA&quot;"/>
+    </numFmts>
+    <fonts count="5">
+        <font><sz val="10"/><color rgb="FF0F172A"/><name val="Calibri"/></font>
+        <font><b/><sz val="13"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+        <font><b/><sz val="10"/><color rgb="FF0B241C"/><name val="Calibri"/></font>
+        <font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+        <font><b/><sz val="10"/><color rgb="FF0F172A"/><name val="Calibri"/></font>
+    </fonts>
+    <fills count="7">
+        <fill><patternFill patternType="none"/></fill>
+        <fill><patternFill patternType="gray125"/></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FF0B241C"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FFE6F4EA"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FF107C41"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FF1E293B"/></patternFill></fill>
+        <fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/></patternFill></fill>
+    </fills>
+    <borders count="2">
+        <border><left/><right/><top/><bottom/><diagonal/></border>
+        <border>
+            <left style="thin"><color rgb="FFCBD5E1"/></left>
+            <right style="thin"><color rgb="FFCBD5E1"/></right>
+            <top style="thin"><color rgb="FFCBD5E1"/></top>
+            <bottom style="thin"><color rgb="FFCBD5E1"/></bottom>
+            <diagonal/>
+        </border>
+    </borders>
+    <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+    <cellXfs count="12">
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+        <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" indent="1"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+        <xf numFmtId="164" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    </cellXfs>
+</styleSheet>';
+
+            $zip_entries = [
+                '[Content_Types].xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+    <Default Extension="xml" ContentType="application/xml"/>
+    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+    <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>',
+                '_rels/.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>',
+                'xl/workbook.xml' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <sheets>
+        <sheet name="1_Synthese_et_Seances" sheetId="1" r:id="rId1"/>
+        <sheet name="2_Detail_Par_Seance" sheetId="2" r:id="rId2"/>
+        <sheet name="3_Caisse_et_Penalites" sheetId="3" r:id="rId3"/>
+    </sheets>
+</workbook>',
+                'xl/_rels/workbook.xml.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+    <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+    <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
+    <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>',
+                'xl/styles.xml' => $styles_xml,
+                'xl/worksheets/sheet1.xml' => $build_sheet_xml($r1, [16, 28, 16, 26, 24, 20, 20, 20, 22, 24], $m1),
+                'xl/worksheets/sheet2.xml' => $build_sheet_xml($r2, [8, 28, 18, 24, 24, 20, 20, 20, 28], $m2),
+                'xl/worksheets/sheet3.xml' => $build_sheet_xml($r3, [14, 26, 18, 22, 42, 18, 22, 26], $m3),
+            ];
+
+            // Assemblage ZIP binaire en mémoire (100% autonome, sans besoin de l'extension php_zip)
+            $local_parts   = [];
+            $central_parts = [];
+            $offset        = 0;
+            foreach ($zip_entries as $name => $content) {
+                $crc  = crc32($content);
+                if ($crc < 0) {
+                    $crc += 4294967296;
+                }
+                $comp = gzdeflate($content, 6);
+                $len_raw  = strlen($content);
+                $len_comp = strlen($comp);
+                $len_name = strlen($name);
+
+                $local_hdr = pack('VvvvvvVVVvv', 0x04034b50, 20, 0, 8, 0, 0, $crc, $len_comp, $len_raw, $len_name, 0);
+                $local_parts[] = $local_hdr . $name . $comp;
+
+                $central_hdr = pack('VvvvvvvVVVvvvvvVV', 0x02014b50, 20, 20, 0, 8, 0, 0, $crc, $len_comp, $len_raw, $len_name, 0, 0, 0, 0, 32, $offset);
+                $central_parts[] = $central_hdr . $name;
+                $offset += strlen($local_hdr) + $len_name + $len_comp;
+            }
+            $central_dir = implode('', $central_parts);
+            $eocd = pack('VvvvvVVv', 0x06054b50, 0, 0, count($zip_entries), count($zip_entries), strlen($central_dir), $offset, 0);
+            $xlsx_binary = implode('', $local_parts) . $central_dir . $eocd;
+
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="Bilan_' . $slug_cycle . '.xlsx"');
+            header('Content-Length: ' . strlen($xlsx_binary));
+            header('Cache-Control: max-age=0');
+            echo $xlsx_binary;
+            exit;
+        }
+
+        // ====================================================================
+        // EXPORT 2 : VRAI FICHIER PDF MULTI-PAGES (SOBRE, NOIR & BLANC, GRAS CIBLÉ)
+        // ====================================================================
+        if ($mode_export === 'pdf') {
+            $pdf_encode = static function (string $s): string {
+                $s = str_replace(['«', '»', '—', '–', '’', '…', '•'], ['"', '"', '-', '-', "'", '...', '-'], $s);
+                if (function_exists('iconv')) {
+                    $c = @iconv('UTF-8', 'Windows-1252//TRANSLIT//IGNORE', $s);
+                    if ($c !== false) {
+                        $s = $c;
+                    }
+                } else {
+                    $s = utf8_decode($s);
+                }
+                return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $s);
+            };
+            $trunc = static function (string $s, int $max): string {
+                return mb_strlen($s, 'UTF-8') > $max ? (mb_substr($s, 0, $max - 1, 'UTF-8') . '.') : $s;
+            };
+
+            $pages_cmds = [];
+            $cur_cmds   = [];
+            $y          = 800.0;
+
+            $start_new_page = static function () use (&$pages_cmds, &$cur_cmds, &$y): void {
+                if (!empty($cur_cmds)) {
+                    $pages_cmds[] = implode("\n", $cur_cmds);
+                }
+                $cur_cmds = [];
+                $y = 800.0;
+            };
+            $rect_fill = static function (float $x, float $y_top, float $w, float $h, float $r, float $g, float $b, bool $stroke = true) use (&$cur_cmds): void {
+                $yb = $y_top - $h;
+                $op = $stroke ? 'B' : 'f';
+                $cur_cmds[] = sprintf('%.3f %.3f %.3f rg 0.25 0.25 0.25 RG 0.5 w %.2f %.2f %.2f %.2f re %s', $r, $g, $b, $x, $yb, $w, $h, $op);
+            };
+            $text_at = static function (float $x, float $y_base, string $txt, int $size = 9, bool $bold = false, array $rgb = [0, 0, 0]) use (&$cur_cmds, $pdf_encode): void {
+                $font = $bold ? '/F2' : '/F1';
+                $cur_cmds[] = sprintf('BT %s %d Tf %.3f %.3f %.3f rg %.2f %.2f Td (%s) Tj ET', $font, $size, $rgb[0], $rgb[1], $rgb[2], $x, $y_base, $pdf_encode($txt));
+            };
+            // $bold peut être true/false (toute la ligne) ou un tableau [true, false, ...] pour mettre en gras uniquement les colonnes importantes
+            $draw_table_row = static function (array $cols, array $widths, float $row_h, array $bg_rgb, array $txt_rgb, $bold = false, int $font_size = 8) use (&$cur_cmds, &$y, $rect_fill, $text_at): void {
+                $x = 30.0;
+                foreach ($cols as $i => $val) {
+                    $w = $widths[$i];
+                    $is_col_bold = is_array($bold) ? !empty($bold[$i]) : (bool)$bold;
+                    $rect_fill($x, $y, $w, $row_h, $bg_rgb[0], $bg_rgb[1], $bg_rgb[2], true);
+                    $text_at($x + 4.0, $y - $row_h + 5.5, (string)$val, $font_size, $is_col_bold, $txt_rgb);
+                    $x += $w;
+                }
+                $y -= $row_h;
+            };
+
+            $montant_cotis_exp = (float)$cycle_choisi['montant_cotisation'];
+            $pen_part_exp      = (float)$cycle_choisi['montant_penalite_retard'];
+            $pen_double_exp    = round($pen_part_exp * 2, 2);
+            $pct_part_exp      = $montant_cotis_exp > 0 ? round(($pen_part_exp / $montant_cotis_exp) * 100, 1) : 0;
+            $pct_double_exp    = round($pct_part_exp * 2, 1);
+            $solde_caisse_exp  = (float)($cycle_choisi['solde_caisse_reserve'] ?? 0);
+
+            // En-tête Page 1 : Sobre, fond blanc encadré, titres en gras noir
+            $rect_fill(30, $y, 535, 46, 1.0, 1.0, 1.0, true);
+            $text_at(40, $y - 19, 'BILAN OFFICIEL DU CYCLE - ' . mb_strtoupper($tontine_info['nom']) . ' (' . $tontine_info['ville'] . ')', 13, true, [0, 0, 0]);
+            $text_at(40, $y - 35, 'Cycle : ' . $cycle_choisi['titre'] . '  |  Statut : ' . strtoupper($cycle_choisi['statut']) . '  |  Edite le ' . date_actuelle('d/m/Y H:i'), 9, true, [0, 0, 0]);
+            $y -= 56;
+
+            // Section 1 : Synthèse du cycle (libellés en normal, valeurs importantes en gras)
+            $rect_fill(30, $y, 535, 20, 0.93, 0.93, 0.93, true);
+            $text_at(38, $y - 14, '1. PARAMETRES GENERAUX & SYNTHESE FINANCIERE DU CYCLE', 10, true, [0, 0, 0]);
+            $y -= 20;
+
+            $w_kpi = [135, 132.5, 135, 132.5];
+            $draw_table_row(['Cotisation / Seance', format_fcfa($montant_cotis_exp), 'Frequence', ucfirst($cycle_choisi['frequence'])], $w_kpi, 18, [1, 1, 1], [0, 0, 0], [false, true, false, true], 8);
+            $draw_table_row(['Date de debut', date('d/m/Y', strtotime($cycle_choisi['date_debut'])), 'Date de fin prevue', !empty($cycle_choisi['date_fin']) ? date('d/m/Y', strtotime($cycle_choisi['date_fin'])) : 'En cours'], $w_kpi, 18, [1, 1, 1], [0, 0, 0], [false, true, false, true], 8);
+            $draw_table_row(['Penalite partielle (1x)', format_fcfa($pen_part_exp) . ' (' . $pct_part_exp . '%)', 'Non-cotisation (2x)', format_fcfa($pen_double_exp) . ' (' . $pct_double_exp . '%)'], $w_kpi, 18, [1, 1, 1], [0, 0, 0], [false, true, false, true], 8);
+            $draw_table_row(['Total Attendu (Cycle)', format_fcfa($total_attendu_cycle), 'Total Collecte (Cycle)', format_fcfa($total_collecte_cycle)], $w_kpi, 18, [1, 1, 1], [0, 0, 0], [true, true, true, true], 8);
+            $draw_table_row(['Reliquat a recouvrer', format_fcfa($total_reliquat_cycle), 'Solde Caisse Reserve', format_fcfa($solde_caisse_exp)], $w_kpi, 18, [1, 1, 1], [0, 0, 0], [true, true, true, true], 8);
+            $y -= 14;
+
+            // Section 2 : Calendrier récapitulatif des séances
+            $rect_fill(30, $y, 535, 20, 0.93, 0.93, 0.93, true);
+            $text_at(38, $y - 14, '2. CALENDRIER DES SEANCES & ORDRE DES BENEFICIAIRES (BOUFFEURS)', 10, true, [0, 0, 0]);
+            $y -= 20;
+
+            $w_sec = [42, 118, 115, 85, 95, 80];
+            $draw_table_row(['Seance', 'Periode / Echeance', 'Beneficiaire (Bouffeur)', 'Pot Collecte / Att.', 'Retenue / Net', 'Statut'], $w_sec, 19, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+
+            foreach ($seances_bilan as $sb) {
+                if ($y < 80) {
+                    $start_new_page();
+                    $draw_table_row(['Seance', 'Periode / Echeance', 'Beneficiaire (Bouffeur)', 'Pot Collecte / Att.', 'Retenue / Net', 'Statut'], $w_sec, 19, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+                }
+                $ns    = (int)$sb['numero_seance'];
+                $per_s = formater_periode_seance($cycle_choisi['date_debut'], $ns, $cycle_choisi['frequence'], $sb['date_echeance']);
+                $ret_s = obtenir_retenue_sur_pot($pdo, $cid, (int)$sb['bouffeur_user_id'], $ns);
+                $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
+
+                $est_act    = ($cycle_choisi['statut'] === 'actif' && $ns === $seance_max_ouverte);
+                $est_fermee = ($cycle_choisi['statut'] === 'actif' && $ns > $seance_max_ouverte);
+                $pot_ok     = ((int)$sb['nb_payes'] >= (int)$sb['nb_cotisations'] || (float)$sb['total_seance_paye'] + 0.01 >= (float)$sb['montant_pot_attendu'] || (int)$sb['pot_totalement_recu'] === 1);
+                $st_lbl     = $pot_ok ? 'Pot complet' : ($est_fermee ? 'Verrouillee' : ($est_act ? 'En cours' : 'Regularisation'));
+
+                // Gras sur : N° Séance, Nom du Bouffeur, Montant Pot et Statut
+                $draw_table_row([
+                    '#' . $ns,
+                    $trunc($per_s, 26),
+                    $trunc($sb['nom_bouffeur'], 23),
+                    number_format((float)$sb['total_seance_paye'], 0, ',', ' ') . ' / ' . number_format((float)$sb['montant_pot_attendu'], 0, ',', ' '),
+                    $ret_s > 0 ? ('-' . number_format($ret_s, 0, ',', ' ') . ' | Net:' . number_format($net_s, 0, ',', ' ')) : ('Net: ' . number_format($net_s, 0, ',', ' ')),
+                    $st_lbl . ' (' . (int)$sb['nb_payes'] . '/' . (int)$sb['nb_cotisations'] . ')'
+                ], $w_sec, 18, [1, 1, 1], [0, 0, 0], [true, false, true, true, ($ret_s > 0), true], 7);
+            }
+            $y -= 16;
+
+            // Section 3 : Détail de chaque séance
+            if ($y < 140) {
+                $start_new_page();
+            }
+            $rect_fill(30, $y, 535, 20, 0.93, 0.93, 0.93, true);
+            $text_at(38, $y - 14, '3. DETAIL COMPLET DES COTISATIONS SEANCE PAR SEANCE', 10, true, [0, 0, 0]);
+            $y -= 24;
+
+            $w_det = [28, 142, 85, 80, 65, 65, 70];
+            foreach ($seances_bilan as $sb) {
+                $ns      = (int)$sb['numero_seance'];
+                $liste_c = $cotisants_par_seance[$ns] ?? [];
+                $need_h  = 42 + (count($liste_c) + 1) * 17;
+                if ($y - $need_h < 55) {
+                    $start_new_page();
+                }
+                $per_s = formater_periode_seance($cycle_choisi['date_debut'], $ns, $cycle_choisi['frequence'], $sb['date_echeance']);
+                $ret_s = obtenir_retenue_sur_pot($pdo, $cid, (int)$sb['bouffeur_user_id'], $ns);
+                $net_s = max(0.0, (float)$sb['total_seance_paye'] - $ret_s);
+
+                $rect_fill(30, $y, 535, 19, 0.95, 0.95, 0.95, true);
+                $hdr_s = 'SEANCE #' . $ns . ' (' . $per_s . ')  |  Bouffeur : ' . $sb['nom_bouffeur'] . '  |  Pot : ' . format_fcfa($sb['total_seance_paye']) . ' / ' . format_fcfa($sb['montant_pot_attendu']);
+                if ($ret_s > 0) {
+                    $hdr_s .= ' (Retenue: -' . format_fcfa($ret_s) . ', Net: ' . format_fcfa($net_s) . ')';
+                }
+                $text_at(36, $y - 13, $trunc($hdr_s, 108), 8, true, [0, 0, 0]);
+                $y -= 19;
+
+                $draw_table_row(['N°', 'Membre Participant', 'Telephone', 'Role', 'Attendu', 'Paye', 'Statut'], $w_det, 17, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+                $num_l = 1;
+                foreach ($liste_c as $dc) {
+                    if ($y < 60) {
+                        $start_new_page();
+                        $draw_table_row(['N°', 'Membre Participant', 'Telephone', 'Role', 'Attendu', 'Paye', 'Statut'], $w_det, 17, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+                    }
+                    $est_b = ((int)$dc['est_bouffeur'] === 1);
+                    $st_c  = ($est_b && $dc['statut'] === 'paye') ? 'Sur Pot' : ucfirst(str_replace('_', ' ', $dc['statut']));
+                    // Le bouffeur de la séance est entièrement en gras ; pour les cotisants, le nom, le montant payé et le statut sont en gras
+                    $bold_cols = $est_b ? true : [false, true, false, false, false, true, true];
+                    $draw_table_row([
+                        (string)$num_l++,
+                        $trunc($dc['nom_complet'], 28),
+                        $dc['telephone'] ?? '',
+                        $est_b ? 'Bouffeur' : 'Cotisant',
+                        number_format((float)$dc['montant_attendu'], 0, ',', ' '),
+                        number_format((float)$dc['montant_paye'], 0, ',', ' '),
+                        $st_c
+                    ], $w_det, 16, [1, 1, 1], [0, 0, 0], $bold_cols, 7);
+                }
+                $y -= 10;
+            }
+
+            // Section 4 : Caisse de réserve & Pénalités
+            if ($y < 130) {
+                $start_new_page();
+            }
+            $rect_fill(30, $y, 535, 20, 0.93, 0.93, 0.93, true);
+            $text_at(38, $y - 14, '4. JOURNAL DE LA CAISSE DE RESERVE & PENALITES DU CYCLE', 10, true, [0, 0, 0]);
+            $y -= 20;
+
+            $w_pen = [45, 115, 70, 165, 70, 70];
+            $draw_table_row(['Seance', 'Membre', 'Type', 'Motif', 'Montant', 'Statut'], $w_pen, 18, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+            if (empty($penalites_export)) {
+                $draw_table_row(['-', 'Aucune penalite ni bonus sur ce cycle', '-', '-', '0 FCFA', '-'], $w_pen, 17, [1, 1, 1], [0, 0, 0], false, 8);
+            } else {
+                foreach ($penalites_export as $pe) {
+                    if ($y < 60) {
+                        $start_new_page();
+                        $draw_table_row(['Seance', 'Membre', 'Type', 'Motif', 'Montant', 'Statut'], $w_pen, 18, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+                    }
+                    $draw_table_row([
+                        '#' . (int)($pe['numero_seance'] ?? 1),
+                        $trunc($pe['nom_complet'], 22),
+                        ucfirst($pe['type_operation']),
+                        $trunc($pe['motif'], 34),
+                        format_fcfa($pe['montant']),
+                        ucfirst(str_replace('_', ' ', $pe['statut']))
+                    ], $w_pen, 16, [1, 1, 1], [0, 0, 0], [true, true, false, false, true, true], 7);
+                }
+            }
+
+            if (!empty($cur_cmds)) {
+                $pages_cmds[] = implode("\n", $cur_cmds);
+            }
+
+            // Construction du binaire PDF 1.4 multi-pages
+            $nb_pages = count($pages_cmds);
+            $objects  = [];
+            $objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+            $objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+            $objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+
+            $kids = [];
+            $obj_id = 5;
+            foreach ($pages_cmds as $p_idx => $cmds_str) {
+                $p_num = $p_idx + 1;
+                $footer_cmd = sprintf(
+                    "\n0.30 0.30 0.30 RG 0.5 w 30 38 m 565 38 l S\nBT /F1 8 Tf 0 0 0 rg 30 26 Td (%s) Tj 470 0 Td (Page %d / %d) Tj ET",
+                    $pdf_encode('Projet Djangui - Bilan Officiel ' . $tontine_info['nom'] . ' (' . $cycle_choisi['titre'] . ')'),
+                    $p_num,
+                    $nb_pages
+                );
+                $stream = $cmds_str . $footer_cmd;
+                $content_id = $obj_id++;
+                $page_id    = $obj_id++;
+                $objects[$content_id] = "<< /Length " . strlen($stream) . " >>\nstream\n" . $stream . "\nendstream";
+                $objects[$page_id]    = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {$content_id} 0 R >>";
+                $kids[] = "{$page_id} 0 R";
+            }
+            $objects[2] = "<< /Type /Pages /Kids [" . implode(' ', $kids) . "] /Count {$nb_pages} >>";
+            ksort($objects);
+
+            $pdf_out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+            $offsets = [];
+            foreach ($objects as $id => $body) {
+                $offsets[$id] = strlen($pdf_out);
+                $pdf_out .= "{$id} 0 obj\n{$body}\nendobj\n";
+            }
+            $xref_pos = strlen($pdf_out);
+            $max_id   = max(array_keys($objects));
+            $pdf_out .= "xref\n0 " . ($max_id + 1) . "\n0000000000 65535 f \n";
+            for ($i = 1; $i <= $max_id; $i++) {
+                $pdf_out .= sprintf("%010d 00000 n \n", $offsets[$i] ?? 0);
+            }
+            $pdf_out .= "trailer\n<< /Size " . ($max_id + 1) . " /Root 1 0 R >>\nstartxref\n{$xref_pos}\n%%EOF";
+
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+            header('Content-Type: application/pdf');
+            header('Content-Disposition: attachment; filename="Bilan_' . $slug_cycle . '.pdf"');
+            header('Content-Length: ' . strlen($pdf_out));
+            header('Cache-Control: max-age=0');
+            echo $pdf_out;
+            exit;
         }
     }
 }
@@ -379,9 +1094,14 @@ require_once __DIR__ . '/includes/navbar.php';
             <?php endif; ?>
             
             <?php if ($est_admin) : ?>
-            <button type="button" onclick="window.print()" class="btn btn-sm btn-outline-secondary">
-                <i class="bi bi-printer me-1"></i>Imprimer
-            </button>
+            <?php if ($cycle_choisi): ?>
+                <a href="cycles.php?cycle_id=<?= (int)$cycle_choisi['id'] ?>&export=excel" class="btn btn-sm btn-success fw-semibold shadow-sm" title="Télécharger le bilan complet du cycle et de chaque séance au format Excel (.xlsx)">
+                    <i class="bi bi-file-earmark-excel-fill me-1"></i>Excel (.xlsx)
+                </a>
+                <a href="cycles.php?cycle_id=<?= (int)$cycle_choisi['id'] ?>&export=pdf" class="btn btn-sm btn-danger fw-semibold shadow-sm" title="Télécharger le bilan complet du cycle et de chaque séance au format PDF (.pdf)">
+                    <i class="bi bi-file-earmark-pdf-fill me-1"></i>PDF (.pdf)
+                </a>
+            <?php endif; ?>
             <?php endif; ?>
 
 
