@@ -561,16 +561,18 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 }
             }
 
-            // B) Déduire ensuite ses pénalités en attente sur son pot et les verser dans la Caisse DU CYCLE
+            // B) Déduire uniquement ses pénalités antérieures à son tour (jamais les pénalités des séances futures après qu'il a déjà bouffé !)
             $stmtPenAttente = $pdo->prepare("
                 SELECT id, contribution_id, numero_seance, montant, motif
                 FROM penalties
                 WHERE cycle_member_id = ?
                   AND type_operation = 'penalite'
                   AND statut = 'en_attente'
+                  AND numero_seance <= ?
+                  AND (contribution_id IS NULL OR numero_seance < ?)
                 ORDER BY numero_seance ASC, id ASC
             ");
-            $stmtPenAttente->execute([$bf_cm_id]);
+            $stmtPenAttente->execute([$bf_cm_id, $bf_rang, $bf_rang]);
 
             foreach ($stmtPenAttente->fetchAll() as $pen) {
                 if ($pot_disponible <= 0) {
