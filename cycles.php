@@ -1305,7 +1305,7 @@ require_once __DIR__ . '/includes/navbar.php';
                         </h5>
                         <p class="text-muted small mb-0">
                          <?php if ($cycle_choisi['statut'] === 'termine'): ?>
-                             Statut du cycle : <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Terminé (toutes les séances, dettes et pénalités sont réglées)</span>
+                             Statut du cycle : <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Terminé</span>
                          <?php elseif (!empty($cycle_choisi['en_regularisation'])): ?>
                              Statut du cycle : <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle-fill me-1"></i>En régularisation (dernière séance passée — dettes ou pénalités en attente)</span>
                          <?php else: ?>
