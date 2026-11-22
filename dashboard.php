@@ -169,9 +169,9 @@ if ($cycle) {
             WHERE cm.cycle_id = ?
               AND c.cycle_member_id != c.beneficiaire_cycle_member_id
               AND c.montant_paye < c.montant_attendu
-              AND c.date_echeance < CURDATE()
+              AND c.date_echeance < ?
         ");
-        $stmtRet->execute([$cid]);
+        $stmtRet->execute([$cid, date_actuelle('Y-m-d')]);
         $nb_retards_cycle = (int)$stmtRet->fetchColumn();
     }
 }
@@ -235,7 +235,7 @@ require_once __DIR__ . '/includes/navbar.php';
             </a>
         </div>
     <?php endif; ?>
-    
+
     <!-- 1. PARCOURS GUIDÉ EN 4 ÉTAPES (STEPPER VISUEL) -->
     <div class="stepper-djangui mb-4">
         <a href="<?= BASE_URL ?>/group.php" class="step-item text-decoration-none <?= $etape_courante > 1 ? 'step-done' : 'step-active' ?>">

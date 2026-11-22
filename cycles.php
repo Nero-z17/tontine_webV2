@@ -188,8 +188,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $est_admin) {
     // ACTION C-BIS : Arrêter / Clôturer manuellement un cycle actif
     if ($action === 'arreter_cycle') {
         $cycle_id = (int)($_POST['cycle_id'] ?? 0);
-        $stmtStop = $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = CURDATE() WHERE id = ? AND tontine_id = ? AND statut = 'actif'");
-        $stmtStop->execute([$cycle_id, $tontine_id]);
+        $stmtStop = $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = ? WHERE id = ? AND tontine_id = ? AND statut = 'actif'");
+        $stmtStop->execute([date_actuelle('Y-m-d'), $cycle_id, $tontine_id]);
         if ($stmtStop->rowCount() > 0) {
             message_flash('warning', 'Le cycle a été arrêté et clôturé. Vous pouvez désormais activer un nouveau cycle (les éventuels impayés ou pénalités restent réglables dans l\'onglet Cotisations & Caisse).');
         }
@@ -1453,7 +1453,6 @@ require_once __DIR__ . '/includes/navbar.php';
                                                 <div class="small text-warning-emphasis fw-semibold">
                                                     Retenue : -<?= format_fcfa($ret_s) ?> (Net : <?= format_fcfa($net_s) ?>)
                                                 </div>
-                                            </div>
                                             <?php endif; ?>
                                         </td>
                                     <?php else: ?>

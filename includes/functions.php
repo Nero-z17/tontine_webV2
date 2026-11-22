@@ -110,10 +110,13 @@ function formater_periode_seance(string $date_debut_cycle, int $numero_seance, s
 // 3. VERROUILLAGE SÉQUENTIEL DES SÉANCES
 // ============================================================================
 function obtenir_seance_ouverte_max(PDO $pdo, int $cycle_id): int {
+    $stmtCyc = $pdo->prepare("SELECT date_debut FROM cycles WHERE id = ? LIMIT 1");
+    $stmtCyc->execute([$cycle_id]);
+    $date_debut = $stmtCyc->fetchColumn();
+
     $stmt = $pdo->prepare("
         SELECT co.numero_seance,
-               MIN(co.date_echeance) AS date_echeance,
-               SUM(CASE WHEN co.cycle_member_id != co.beneficiaire_cycle_member_id AND co.montant_paye < co.montant_attendu THEN 1 ELSE 0 END) AS nb_impayes
+               MIN(co.date_echeance) AS date_echeance
         FROM contributions co
         INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
         WHERE cm.cycle_id = ?
@@ -124,21 +127,23 @@ function obtenir_seance_ouverte_max(PDO $pdo, int $cycle_id): int {
     $seances = $stmt->fetchAll();
 
     if (empty($seances)) {
-        return 1;
+        return 0;
     }
 
     $aujourdhui = date_actuelle('Y-m-d');
+
+    // Avant la date de début du cycle, aucune séance n'est encore ouverte
+    if ($date_debut && $aujourdhui < $date_debut) {
+        return 0;
+    }
+
     $seance_ouverte = 1;
-
-    foreach ($seances as $s) {
-        $num = (int)$s['numero_seance'];
-        $ech = $s['date_echeance'];
-        $impayes = (int)$s['nb_impayes'];
-
-        $seance_ouverte = $num;
-
-        $est_cloturee = ($impayes === 0) || (strtotime($aujourdhui) > strtotime($ech));
-        if (!$est_cloturee) {
+    $nb = count($seances);
+    for ($i = 0; $i < $nb - 1; $i++) {
+        // La séance suivante #(i+2) ne s'ouvre que le lendemain de l'échéance de la séance #(i+1)
+        if ($aujourdhui > $seances[$i]['date_echeance']) {
+            $seance_ouverte = (int)$seances[$i + 1]['numero_seance'];
+        } else {
             break;
         }
     }

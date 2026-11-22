@@ -501,6 +501,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
                 } elseif ((float)$loan_row['montant_demande'] > $solde_reel + 0.001) {
                     $pdo->rollBack();
                     message_flash('danger', 'Solde de caisse insuffisant (' . format_fcfa($solde_reel) . ') pour approuver ce prêt de ' . format_fcfa($loan_row['montant_demande']) . '.');
+                } elseif ($loan_row['date_echeance'] <= date_actuelle('Y-m-d')) {
+                    $pdo->rollBack();
+                    message_flash('danger', 'Impossible d\'approuver ce prêt : la date de remboursement demandée (' . date('d/m/Y', strtotime($loan_row['date_echeance'])) . ') est déjà atteinte ou dépassée.');
                 } else {
                     $capital   = round((float)$loan_row['montant_demande'], 2);
                     $taux_ok   = round((float)$taux_int, 2);
@@ -549,7 +552,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
         $montant_remb  = filter_var($_POST['montant_remb'] ?? null, FILTER_VALIDATE_FLOAT);
         $mode_paiement = trim($_POST['mode_paiement'] ?? 'momo');
 
-        $stmtL = $pdo->prepare("SELECT * FROM loans WHERE id = ? AND cycle_id = ? AND cycle_member_id = ? AND statut IN ('approuve', 'en_retard') LIMIT 1");
+        $pdo->beginTransaction();
+        $stmtL = $pdo->prepare("SELECT * FROM loans WHERE id = ? AND cycle_id = ? AND cycle_member_id = ? AND statut IN ('approuve', 'en_retard') LIMIT 1 FOR UPDATE");
         $stmtL->execute([$loan_id, $cid, (int)$mon_cycle_member['id']]);
         $loan_r = $stmtL->fetch();
 
@@ -567,7 +571,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
                 $solde_ok = ($nv_remb + 0.01 >= (float)$loan_r['montant_total_du']);
                 $ref_lr  = 'REMB-PRET-' . $loan_id . '-' . date_actuelle('ymd') . '-' . random_int(100, 999);
 
-                $pdo->beginTransaction();
                 $pdo->prepare("
                     UPDATE loans
                     SET montant_rembourse = ?,
