@@ -214,6 +214,28 @@ require_once __DIR__ . '/includes/navbar.php';
         </div>
     <?php endif; ?>
 
+    <?php
+        $nb_prets_att_dash = 0;
+        try {
+            if ($est_admin) {
+                $stPD = $pdo->prepare("SELECT COUNT(*) FROM loans l INNER JOIN cycles c ON c.id = l.cycle_id WHERE c.tontine_id = ? AND l.statut = 'en_attente'");
+                $stPD->execute([$tontine_id]);
+                $nb_prets_att_dash = (int)$stPD->fetchColumn();
+            }
+        } catch (PDOException $e) {}
+    ?>
+    <?php if ($est_admin && $nb_prets_att_dash > 0): ?>
+        <div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2 shadow-sm rounded-4 mb-4">
+            <div>
+                <i class="bi bi-bank fs-5 me-2"></i>
+                <strong><?= $nb_prets_att_dash ?> demande(s) de prêt caisse en attente :</strong> fixez le taux d'intérêt pour approuver ou refuser.
+            </div>
+            <a href="<?= BASE_URL ?>/finances.php?tab=prets" class="btn btn-sm btn-primary fw-bold">
+                Gérer les prêts <i class="bi bi-arrow-right ms-1"></i>
+            </a>
+        </div>
+    <?php endif; ?>
+    
     <!-- 1. PARCOURS GUIDÉ EN 4 ÉTAPES (STEPPER VISUEL) -->
     <div class="stepper-djangui mb-4">
         <a href="<?= BASE_URL ?>/group.php" class="step-item text-decoration-none <?= $etape_courante > 1 ? 'step-done' : 'step-active' ?>">

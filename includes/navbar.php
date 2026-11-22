@@ -95,6 +95,35 @@ if ($est_connecte && isset($pdo) && $pdo instanceof PDO && $tontine_id_nav > 0) 
         ];
     }
 
+    try {
+        if ($est_admin) {
+            $stmtLoanAtt = $pdo->prepare("SELECT COUNT(*) FROM loans l INNER JOIN cycles c ON c.id = l.cycle_id WHERE c.tontine_id = ? AND l.statut = 'en_attente'");
+            $stmtLoanAtt->execute([$tontine_id_nav]);
+            $nb_loans_att = (int)$stmtLoanAtt->fetchColumn();
+            if ($nb_loans_att > 0) {
+                $liste_alertes_top[] = [
+                    'icone' => 'bi-bank text-warning',
+                    'texte' => $nb_loans_att . ' demande(s) de prêt caisse à valider',
+                    'lien'  => BASE_URL . '/finances.php?tab=prets'
+                ];
+            }
+        }
+        $stmtMyLoanRet = $pdo->prepare("
+            SELECT COUNT(*) FROM loans l
+            INNER JOIN cycle_members cm ON cm.id = l.cycle_member_id
+            INNER JOIN cycles c ON c.id = l.cycle_id
+            WHERE cm.user_id = ? AND c.tontine_id = ? AND l.statut = 'en_retard'
+        ");
+        $stmtMyLoanRet->execute([$user_id_nav, $tontine_id_nav]);
+        if ((int)$stmtMyLoanRet->fetchColumn() > 0) {
+            $liste_alertes_top[] = [
+                'icone' => 'bi-exclamation-octagon-fill text-danger',
+                'texte' => 'Prêt caisse en retard à rembourser',
+                'lien'  => BASE_URL . '/finances.php?tab=prets'
+            ];
+        }
+    } catch (PDOException $e) {}
+    
     $stmtZoomNav = $pdo->prepare("
         SELECT titre, date_heure FROM meetings
         WHERE tontine_id = ? AND statut = 'publiee' AND date_heure >= NOW()

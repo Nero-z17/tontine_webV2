@@ -270,7 +270,8 @@ $stmtCycles = $pdo->prepare("
     SELECT c.*,
            (SELECT MAX(co.date_echeance) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = c.id) AS derniere_echeance_cycle,
            (SELECT COUNT(*) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = c.id AND co.montant_paye + 0.01 < co.montant_attendu) AS nb_cotis_impayees,
-           (SELECT COUNT(*) FROM penalties p INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id WHERE cm.cycle_id = c.id AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_attente
+           (SELECT COUNT(*) FROM penalties p INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id WHERE cm.cycle_id = c.id AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_attente,
+           (SELECT COUNT(*) FROM loans l WHERE l.cycle_id = c.id AND l.statut IN ('en_attente', 'approuve', 'en_retard')) AS nb_prets_ouverts
     FROM cycles c
     WHERE c.tontine_id = ?
     ORDER BY (c.statut = 'actif') DESC, c.numero_cycle DESC
@@ -281,7 +282,7 @@ $tous_cycles = $stmtCycles->fetchAll();
 $aujourdhui_cycle = date_actuelle('Y-m-d');
 foreach ($tous_cycles as &$c_item) {
     $der_ech = $c_item['derniere_echeance_cycle'] ?? null;
-    $a_impayes = ((int)$c_item['nb_cotis_impayees'] > 0 || (int)$c_item['nb_pen_attente'] > 0);
+    $a_impayes = ((int)$c_item['nb_cotis_impayees'] > 0 || (int)$c_item['nb_pen_attente'] > 0 || (int)($c_item['nb_prets_ouverts'] ?? 0) > 0);
     if ($c_item['statut'] === 'actif' && !empty($der_ech) && $aujourdhui_cycle > $der_ech) {
         if ($a_impayes) {
             $c_item['statut_affiche'] = 'EN RÉGULARISATION';
@@ -394,6 +395,20 @@ if ($cycle_choisi) {
         ");
         $stmtPenExp->execute([$cid]);
         $penalites_export = $stmtPenExp->fetchAll();
+
+        $prets_export = [];
+        try {
+            $stmtPrExp = $pdo->prepare("
+                SELECT l.*, u.nom_complet, u.telephone
+                FROM loans l
+                INNER JOIN cycle_members cm ON cm.id = l.cycle_member_id
+                INNER JOIN users u ON u.id = cm.user_id
+                WHERE l.cycle_id = ?
+                ORDER BY l.date_demande ASC
+            ");
+            $stmtPrExp->execute([$cid]);
+            $prets_export = $stmtPrExp->fetchAll();
+        } catch (PDOException $e) {}
 
         $slug_cycle = preg_replace('/[^A-Za-z0-9_-]+/', '_', $cycle_choisi['titre']);
         $slug_cycle = trim($slug_cycle, '_') ?: ('Cycle_' . (int)$cycle_choisi['numero_cycle']);
@@ -718,6 +733,39 @@ if ($cycle_choisi) {
                 ['v' => '', 's' => 9],
             ]];
 
+            // ---------------- FEUILLE 4 : PRÊTS SUR LA CAISSE ----------------
+            $r4 = [];
+            $m4 = ['A1:H1', 'A2:H2', 'A4:H4'];
+            $r4[] = ['height' => 28, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 1]), [0 => ['v' => 'PRÊTS SUR LA CAISSE DE RÉSERVE — ' . mb_strtoupper($cycle_choisi['titre']), 's' => 1]])];
+            $r4[] = ['height' => 22, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 2]), [0 => ['v' => 'Tontine : ' . $tontine_info['nom'] . '  |  Solde actuel caisse : ' . number_format($solde_caisse_exp, 0, ',', ' ') . ' FCFA', 's' => 2]])];
+            $r4[] = ['height' => 12, 'cells' => []];
+            $r4[] = ['height' => 24, 'cells' => array_replace(array_fill(0, 8, ['v' => '', 's' => 3]), [0 => ['v' => 'JOURNAL DES PRÊTS ACCORDÉS, INTÉRÊTS & REMBOURSEMENTS', 's' => 3]])];
+            $r4[] = ['height' => 22, 'cells' => [
+                ['v' => 'Emprunteur', 's' => 4], ['v' => 'Motif', 's' => 4], ['v' => 'Capital (FCFA)', 's' => 4],
+                ['v' => 'Taux & Maj.', 's' => 4], ['v' => 'Total Dû (FCFA)', 's' => 4], ['v' => 'Remboursé (FCFA)', 's' => 4],
+                ['v' => 'Échéance', 's' => 4], ['v' => 'Statut', 's' => 4],
+            ]];
+            if (empty($prets_export)) {
+                $r4[] = ['height' => 22, 'cells' => [
+                    ['v' => 'Aucun prêt enregistré sur ce cycle.', 's' => 5], ['v' => '', 's' => 5],
+                    ['v' => 0, 't' => 'num', 's' => 7], ['v' => '-', 's' => 10], ['v' => 0, 't' => 'num', 's' => 7],
+                    ['v' => 0, 't' => 'num', 's' => 7], ['v' => '-', 's' => 10], ['v' => '-', 's' => 10]
+                ]];
+            } else {
+                foreach ($prets_export as $pe_l) {
+                    $r4[] = ['height' => 20, 'cells' => [
+                        ['v' => $pe_l['nom_complet'], 's' => 6],
+                        ['v' => $pe_l['motif'], 's' => 5],
+                        ['v' => (float)$pe_l['montant_demande'], 't' => 'num', 's' => 7],
+                        ['v' => (float)$pe_l['taux_interet'] . '% (+' . (int)$pe_l['nb_majorations'] . ' maj.)', 's' => 10],
+                        ['v' => (float)$pe_l['montant_total_du'], 't' => 'num', 's' => 7],
+                        ['v' => (float)$pe_l['montant_rembourse'], 't' => 'num', 's' => 7],
+                        ['v' => date('d/m/Y', strtotime($pe_l['date_echeance'])), 's' => 10],
+                        ['v' => strtoupper($pe_l['statut']), 's' => 10],
+                    ]];
+                }
+            }
+
             $styles_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
     <numFmts count="1">
@@ -776,6 +824,7 @@ if ($cycle_choisi) {
     <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
     <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
     <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    <Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>',
                 '_rels/.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -787,6 +836,7 @@ if ($cycle_choisi) {
         <sheet name="1_Synthese_et_Seances" sheetId="1" r:id="rId1"/>
         <sheet name="2_Detail_Par_Seance" sheetId="2" r:id="rId2"/>
         <sheet name="3_Caisse_et_Penalites" sheetId="3" r:id="rId3"/>
+        <sheet name="4_Prets_Caisse" sheetId="4" r:id="rId5"/>
     </sheets>
 </workbook>',
                 'xl/_rels/workbook.xml.rels' => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -795,11 +845,13 @@ if ($cycle_choisi) {
     <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
     <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
     <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+    <Relationship Id="rId5" Type="[http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet](http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet)" Target="worksheets/sheet4.xml"/>
 </Relationships>',
                 'xl/styles.xml' => $styles_xml,
                 'xl/worksheets/sheet1.xml' => $build_sheet_xml($r1, [16, 28, 16, 26, 24, 20, 20, 20, 22, 24], $m1),
                 'xl/worksheets/sheet2.xml' => $build_sheet_xml($r2, [8, 28, 18, 24, 24, 20, 20, 20, 28], $m2),
                 'xl/worksheets/sheet3.xml' => $build_sheet_xml($r3, [14, 26, 18, 22, 42, 18, 22, 26], $m3),
+                'xl/worksheets/sheet4.xml' => $build_sheet_xml($r4, [24, 30, 18, 18, 18, 18, 14, 16], $m4),
             ];
 
             // Assemblage ZIP binaire en mémoire (100% autonome, sans besoin de l'extension php_zip)
@@ -1030,6 +1082,35 @@ if ($cycle_choisi) {
                         format_fcfa($pe['montant']),
                         ucfirst(str_replace('_', ' ', $pe['statut']))
                     ], $w_pen, 16, [1, 1, 1], [0, 0, 0], [true, true, false, false, true, true], 7);
+                }
+            }
+
+            // Section 5 : Prêts sur la caisse du cycle
+            $y -= 14;
+            if ($y < 130) { $start_new_page(); }
+            $rect_fill(30, $y, 535, 20, 0.93, 0.93, 0.93, true);
+            $text_at(38, $y - 14, '5. PRETS SUR LA CAISSE DE RESERVE DU CYCLE', 10, true, [0, 0, 0]);
+            $y -= 20;
+
+            $w_pr = [115, 70, 65, 75, 75, 65, 70];
+            $draw_table_row(['Emprunteur', 'Capital', 'Taux/Maj.', 'Total Du', 'Rembourse', 'Echeance', 'Statut'], $w_pr, 18, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+            if (empty($prets_export)) {
+                $draw_table_row(['Aucun pret sur ce cycle', '0 FCFA', '-', '0 FCFA', '0 FCFA', '-', '-'], $w_pr, 17, [1, 1, 1], [0, 0, 0], false, 8);
+            } else {
+                foreach ($prets_export as $pe_l) {
+                    if ($y < 60) {
+                        $start_new_page();
+                        $draw_table_row(['Emprunteur', 'Capital', 'Taux/Maj.', 'Total Du', 'Rembourse', 'Echeance', 'Statut'], $w_pr, 18, [0.95, 0.95, 0.95], [0, 0, 0], true, 8);
+                    }
+                    $draw_table_row([
+                        $trunc($pe_l['nom_complet'], 22),
+                        number_format((float)$pe_l['montant_demande'], 0, ',', ' '),
+                        (float)$pe_l['taux_interet'] . '% (+' . (int)$pe_l['nb_majorations'] . ')',
+                        number_format((float)$pe_l['montant_total_du'], 0, ',', ' '),
+                        number_format((float)$pe_l['montant_rembourse'], 0, ',', ' '),
+                        date('d/m/Y', strtotime($pe_l['date_echeance'])),
+                        ucfirst(str_replace('_', ' ', $pe_l['statut']))
+                    ], $w_pr, 16, [1, 1, 1], [0, 0, 0], [true, false, false, true, true, false, true], 7);
                 }
             }
 

@@ -164,7 +164,25 @@ function obtenir_retenue_sur_pot(PDO $pdo, int $cycle_id, int $bouffeur_user_id,
           AND p.reference_paiement LIKE ?
     ");
     $stmt->execute([$cycle_id, $bouffeur_user_id, 'RET-%-S' . $rang_seance . '-%']);
-    return round((float)$stmt->fetchColumn(), 2);
+    $ret_cotis_pen = (float)$stmt->fetchColumn();
+
+    $ret_prets = 0.0;
+    try {
+        $stmtLP = $pdo->prepare("
+            SELECT COALESCE(SUM(lr.montant), 0)
+            FROM loan_repayments lr
+            INNER JOIN loans l ON l.id = lr.loan_id
+            WHERE l.cycle_id = ?
+              AND lr.paye_par_user_id = ?
+              AND lr.reference_paiement LIKE ?
+        ");
+        $stmtLP->execute([$cycle_id, $bouffeur_user_id, 'RET-PRET-S' . $rang_seance . '-%']);
+        $ret_prets = (float)$stmtLP->fetchColumn();
+    } catch (PDOException $e) {
+        $ret_prets = 0.0;
+    }
+
+    return round($ret_cotis_pen + $ret_prets, 2);
 }
 
 function resynchroniser_pots_cycle(PDO $pdo, int $cycle_id): void {
@@ -463,6 +481,84 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
         }
     }
 
+
+    // 6-BIS. SYNCHRONISATION DES PRÊTS CAISSE (RETARD & MAJORATION INTÉRÊT SIMPLE PAR SÉANCE)
+    try {
+        foreach ($cycles_actifs as $cyc) {
+            $cid = (int)$cyc['id'];
+
+            $stmtLoansSync = $pdo->prepare("
+                SELECT * FROM loans
+                WHERE cycle_id = ? AND statut IN ('approuve', 'en_retard')
+            ");
+            $stmtLoansSync->execute([$cid]);
+            $prets_actifs = $stmtLoansSync->fetchAll();
+            if (empty($prets_actifs)) {
+                continue;
+            }
+
+            // Construire toutes les échéances de séances du cycle + 36 périodes post-cycle
+            $stmtEchL = $pdo->prepare("
+                SELECT co.numero_seance, MIN(co.date_echeance) AS date_echeance
+                FROM contributions co
+                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
+                WHERE cm.cycle_id = ?
+                GROUP BY co.numero_seance
+                ORDER BY co.numero_seance ASC
+            ");
+            $stmtEchL->execute([$cid]);
+            $dates_seances_l = array_column($stmtEchL->fetchAll(), 'date_echeance');
+            $nb_s_l = count($dates_seances_l);
+            for ($k_ex = $nb_s_l + 1; $k_ex <= $nb_s_l + 36; $k_ex++) {
+                $dt_ex = calculer_echeance_seance($cyc['date_debut'], $k_ex, $cyc['frequence']);
+                $dates_seances_l[] = $dt_ex;
+                if ($dt_ex >= $aujourdhui) {
+                    break;
+                }
+            }
+
+            foreach ($prets_actifs as $loan) {
+                $lid       = (int)$loan['id'];
+                $capital   = (float)$loan['montant_demande'];
+                $int_init  = (float)$loan['montant_interet_initial'];
+                $rembourse = (float)$loan['montant_rembourse'];
+                $ech_pret  = $loan['date_echeance'];
+
+                // Si la date simulée est revenue avant ou à la date d'échéance du prêt
+                if ($aujourdhui <= $ech_pret) {
+                    $total_base = round($capital + $int_init, 2);
+                    $nouv_st    = ($rembourse + 0.01 >= $total_base) ? 'rembourse' : 'approuve';
+                    $pdo->prepare("
+                        UPDATE loans
+                        SET statut = ?, nb_majorations = 0, montant_majorations = 0.00, montant_total_du = ?,
+                            date_remboursement_complet = CASE WHEN ? = 'rembourse' AND date_remboursement_complet IS NULL THEN NOW() ELSE date_remboursement_complet END
+                        WHERE id = ?
+                    ")->execute([$nouv_st, $total_base, $nouv_st, $lid]);
+                } else {
+                    // Date limite dépassée : compter les échéances de séances franchies après date_echeance
+                    $nb_maj = 0;
+                    foreach ($dates_seances_l as $dt_s) {
+                        if ($dt_s > $ech_pret && $dt_s < $aujourdhui) {
+                            $nb_maj++;
+                        }
+                    }
+                    $mt_maj   = round($nb_maj * $int_init, 2);
+                    $total_du = round($capital + $int_init + $mt_maj, 2);
+                    $nouv_st  = ($rembourse + 0.01 >= $total_du) ? 'rembourse' : 'en_retard';
+
+                    $pdo->prepare("
+                        UPDATE loans
+                        SET statut = ?, nb_majorations = ?, montant_majorations = ?, montant_total_du = ?,
+                            date_remboursement_complet = CASE WHEN ? = 'rembourse' AND date_remboursement_complet IS NULL THEN NOW() ELSE date_remboursement_complet END
+                        WHERE id = ?
+                    ")->execute([$nouv_st, $nb_maj, $mt_maj, $total_du, $nouv_st, $lid]);
+                }
+            }
+        }
+    } catch (PDOException $e) {
+        // Table loans non encore créée
+    }
+    
     // 7. RETENUE AUTOMATIQUE SUR LE POT DU BOUFFEUR (SANS JAMAIS ALTÉRER montant_pot_recu)
     foreach ($cycles_actifs as $cyc) {
         $cid = (int)$cyc['id'];
@@ -496,17 +592,7 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
             $pot_total_actuel = (float)$stmtPotTotal->fetchColumn();
 
             // Somme déjà prélevée par retenue automatique sur le pot de ce bouffeur (RET-DETTE-S{rang} ou RET-PEN-S{rang})
-            $stmtDejaRetenu = $pdo->prepare("
-                SELECT COALESCE(SUM(p.montant_total), 0)
-                FROM payments p
-                INNER JOIN contributions co ON co.id = p.contribution_id
-                INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id
-                WHERE cm.cycle_id = ?
-                  AND p.paye_par_user_id = ?
-                  AND p.reference_paiement LIKE ?
-            ");
-            $stmtDejaRetenu->execute([$cid, $bf_user_id, 'RET-%-S' . $bf_rang . '-%']);
-            $deja_retenu = (float)$stmtDejaRetenu->fetchColumn();
+            $deja_retenu = obtenir_retenue_sur_pot($pdo, $cid, $bf_user_id, $bf_rang);
 
             $pot_disponible = round(max(0.0, $pot_total_actuel - $deja_retenu), 2);
             if ($pot_disponible <= 0) {
@@ -638,6 +724,67 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                     $pot_disponible = round($pot_disponible - $prelevement_pen, 2);
                 }
             }
+
+            // C) Déduire en 3e priorité les prêts EN RETARD du bouffeur (UNIQUEMENT sur le pot qui arrive, jamais sur un pot déjà passé avant le prêt)
+            if ($pot_disponible > 0) {
+                try {
+                    $stmtDatePot = $pdo->prepare("SELECT date_prevue_pot FROM cycle_members WHERE id = ? LIMIT 1");
+                    $stmtDatePot->execute([$bf_cm_id]);
+                    $date_pot_bf = $stmtDatePot->fetchColumn() ?: '1970-01-01';
+
+                    $stmtPretsRetard = $pdo->prepare("
+                        SELECT id, montant_total_du, montant_rembourse, seance_approbation, date_decision
+                        FROM loans
+                        WHERE cycle_id = ?
+                          AND cycle_member_id = ?
+                          AND statut = 'en_retard'
+                          AND (montant_total_du - montant_rembourse) > 0.01
+                          AND (seance_approbation IS NULL OR seance_approbation <= ?)
+                          AND (date_decision IS NULL OR DATE(date_decision) <= ?)
+                        ORDER BY date_echeance ASC, id ASC
+                    ");
+                    $stmtPretsRetard->execute([$cid, $bf_cm_id, $bf_rang, $date_pot_bf]);
+
+                    foreach ($stmtPretsRetard->fetchAll() as $l_ret) {
+                        if ($pot_disponible <= 0) {
+                            break;
+                        }
+                        $reste_pret = round(max(0.0, (float)$l_ret['montant_total_du'] - (float)$l_ret['montant_rembourse']), 2);
+                        $prelev_l   = round(min($pot_disponible, $reste_pret), 2);
+                        if ($prelev_l > 0) {
+                            $nv_remb = round((float)$l_ret['montant_rembourse'] + $prelev_l, 2);
+                            $est_sol = ($nv_remb + 0.01 >= (float)$l_ret['montant_total_du']);
+                            $pdo->prepare("
+                                UPDATE loans
+                                SET montant_rembourse = ?,
+                                    statut = ?,
+                                    date_remboursement_complet = CASE WHEN ? = 1 THEN NOW() ELSE date_remboursement_complet END
+                                WHERE id = ?
+                            ")->execute([$nv_remb, $est_sol ? 'rembourse' : 'en_retard', $est_sol ? 1 : 0, (int)$l_ret['id']]);
+
+                            $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")
+                                ->execute([$prelev_l, $cid]);
+
+                            $ref_lp = 'RET-PRET-S' . $bf_rang . '-L' . (int)$l_ret['id'] . '-' . random_int(100, 999);
+                            $pdo->prepare("
+                                INSERT INTO loan_repayments (loan_id, paye_par_user_id, montant, mode_paiement, reference_paiement, date_paiement, commentaire)
+                                VALUES (?, ?, ?, ?, ?, NOW(), ?)
+                            ")->execute([
+                                (int)$l_ret['id'],
+                                $bf_user_id,
+                                $prelev_l,
+                                $bf_canal,
+                                $ref_lp,
+                                "Retenue automatique sur son pot (Tour #{$bf_rang}) pour rembourser son prêt en retard #" . (int)$l_ret['id']
+                            ]);
+
+                            $pot_disponible = round($pot_disponible - $prelev_l, 2);
+                        }
+                    }
+                } catch (PDOException $e) {
+                    // Table loans absente
+                }
+            }
         }
 
         // Resynchroniser les pots après les retenues éventuelles
@@ -671,9 +818,18 @@ function synchroniser_horloge_et_retards(PDO $pdo): void {
                 $stmtPenNonReglees->execute([$cid]);
                 $nb_pen_attente = (int)$stmtPenNonReglees->fetchColumn();
 
-                if ($derniere_ech_passee && $cotis_toutes_payees && $nb_pen_attente === 0) {
-                    $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = CURDATE() WHERE id = ?")
-                        ->execute([$cid]);
+                $nb_prets_ouverts = 0;
+                try {
+                    $stmtPrOuv = $pdo->prepare("SELECT COUNT(*) FROM loans WHERE cycle_id = ? AND statut IN ('en_attente', 'approuve', 'en_retard')");
+                    $stmtPrOuv->execute([$cid]);
+                    $nb_prets_ouverts = (int)$stmtPrOuv->fetchColumn();
+                } catch (PDOException $e) {
+                    $nb_prets_ouverts = 0;
+                }
+
+                if ($derniere_ech_passee && $cotis_toutes_payees && $nb_pen_attente === 0 && $nb_prets_ouverts === 0) {
+                    $pdo->prepare("UPDATE cycles SET statut = 'termine', date_fin = ? WHERE id = ?")
+                        ->execute([date_actuelle('Y-m-d'), $cid]);
                 }
             }
         }

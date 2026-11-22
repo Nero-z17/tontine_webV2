@@ -52,13 +52,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         (SELECT COUNT(*) FROM penalties p
                          INNER JOIN cycle_members cm ON cm.id = p.cycle_member_id
                          INNER JOIN cycles c ON c.id = cm.cycle_id
-                         WHERE cm.user_id = ? AND c.tontine_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_dues
+                         WHERE cm.user_id = ? AND c.tontine_id = ? AND p.type_operation = 'penalite' AND p.statut = 'en_attente') AS nb_pen_dues,
+                        (SELECT COUNT(*) FROM loans l
+                         INNER JOIN cycle_members cm ON cm.id = l.cycle_member_id
+                         INNER JOIN cycles c ON c.id = l.cycle_id
+                         WHERE cm.user_id = ? AND c.tontine_id = ? AND l.statut IN ('en_attente', 'approuve', 'en_retard')) AS nb_prets_dus
                 ");
-                $stmtEng->execute([$membre_id, $tontine_id, $membre_id, $tontine_id]);
+                $stmtEng->execute([$membre_id, $tontine_id, $membre_id, $tontine_id, $membre_id, $tontine_id]);
                 $eng = $stmtEng->fetch();
 
-                if (((int)($eng['nb_cotis_dues'] ?? 0) > 0) || ((int)($eng['nb_pen_dues'] ?? 0) > 0)) {
-                    message_flash('warning', 'Action refusée : ce membre participe à un cycle en cours et possède encore des cotisations ou pénalités à régler. S\'il est désactivé maintenant, il ne pourra plus se connecter pour solder ses dettes.');
+                if (((int)($eng['nb_cotis_dues'] ?? 0) > 0) || ((int)($eng['nb_pen_dues'] ?? 0) > 0) || ((int)($eng['nb_prets_dus'] ?? 0) > 0)) {
+                    message_flash('warning', 'Action refusée : ce membre possède encore des cotisations, pénalités ou un prêt caisse non soldé.');
                     header('Location: ' . BASE_URL . '/group.php?tab=membres');
                     exit;
                 }

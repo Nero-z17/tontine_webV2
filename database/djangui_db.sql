@@ -357,3 +357,57 @@ INSERT INTO subscriptions (id, tontine_id, type_periode, montant, date_debut, da
 -- 10. Historique de transfert d'administrateur
 INSERT INTO admin_transfers (id, tontine_id, ancien_admin_id, nouvel_admin_id, ancien_reste_membre, motif, date_transfert) VALUES
 (1, 1, 3, 1, 1, 'Passation de la gestion de Jean-Paul Kamga à Marie-Claire Ngono à la fin du Cycle 1.', '2026-08-31 18:00:00');
+
+
+-- ============================================================================
+-- 11. TABLE : loans (Prêts accordés sur la caisse de réserve d'un cycle)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS loans (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    cycle_id INT UNSIGNED NOT NULL,
+    cycle_member_id INT UNSIGNED NOT NULL,
+    montant_demande DECIMAL(12,2) NOT NULL,
+    taux_interet DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT 'Pourcentage d interet fixe par l admin',
+    montant_interet_initial DECIMAL(12,2) NOT NULL DEFAULT 0.00 COMMENT 'Interet simple initial (montant_demande * taux / 100)',
+    nb_majorations INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Nombre de seances depassees apres date_echeance',
+    montant_majorations DECIMAL(12,2) NOT NULL DEFAULT 0.00 COMMENT 'Cumul des majorations (+interet simple par seance)',
+    montant_total_du DECIMAL(12,2) NOT NULL DEFAULT 0.00 COMMENT 'Capital + interet initial + majorations',
+    montant_rembourse DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    motif VARCHAR(255) NOT NULL,
+    statut ENUM('en_attente', 'approuve', 'refuse', 'en_retard', 'rembourse') NOT NULL DEFAULT 'en_attente',
+    seance_approbation INT UNSIGNED DEFAULT NULL COMMENT 'Seance ouverte lors de la validation (empeche toute retenue sur un pot deja passe)',
+    date_demande DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    date_decision DATETIME DEFAULT NULL,
+    date_echeance DATE NOT NULL COMMENT 'Date limite de remboursement (<= fin du cycle)',
+    date_remboursement_complet DATETIME DEFAULT NULL,
+    decide_par_id INT UNSIGNED DEFAULT NULL,
+    commentaire_admin VARCHAR(255) DEFAULT NULL,
+
+    CONSTRAINT chk_loans_montant CHECK (montant_demande > 0),
+    CONSTRAINT chk_loans_taux CHECK (taux_interet >= 0),
+    CONSTRAINT fk_loans_cycle FOREIGN KEY (cycle_id) REFERENCES cycles(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_loans_cm FOREIGN KEY (cycle_member_id) REFERENCES cycle_members(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_loans_decideur FOREIGN KEY (decide_par_id) REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX idx_loans_cycle_statut (cycle_id, statut),
+    INDEX idx_loans_membre_statut (cycle_member_id, statut)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 12. TABLE : loan_repayments (Remboursements par tranches et retenues sur pot)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS loan_repayments (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    loan_id INT UNSIGNED NOT NULL,
+    paye_par_user_id INT UNSIGNED NOT NULL,
+    montant DECIMAL(12,2) NOT NULL,
+    mode_paiement ENUM('momo', 'om', 'especes') NOT NULL DEFAULT 'momo',
+    reference_paiement VARCHAR(80) NOT NULL,
+    date_paiement DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    commentaire VARCHAR(255) DEFAULT NULL,
+
+    CONSTRAINT chk_lr_montant CHECK (montant > 0),
+    CONSTRAINT fk_lr_loan FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_lr_user FOREIGN KEY (paye_par_user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    INDEX idx_lr_loan (loan_id),
+    INDEX idx_lr_user (paye_par_user_id, date_paiement)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

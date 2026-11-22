@@ -436,6 +436,165 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $cycle) {
         header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=caisse');
         exit;
     }
+
+    // ACTION F : Demander un prêt sur la caisse du cycle (Membre OU Secrétaire/Admin participant au cycle)
+    if ($action === 'demander_pret' && $mon_cycle_member) {
+        $montant_pret  = filter_var($_POST['montant_demande'] ?? null, FILTER_VALIDATE_FLOAT);
+        $date_ech_pret = trim($_POST['date_echeance'] ?? '');
+        $motif_pret    = trim($_POST['motif'] ?? '');
+        $aujourdhui_p  = date_actuelle('Y-m-d');
+
+        $stmtDerEch = $pdo->prepare("SELECT MAX(co.date_echeance) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = ?");
+        $stmtDerEch->execute([$cid]);
+        $derniere_ech_c = $stmtDerEch->fetchColumn() ?: ($cycle['date_fin'] ?? '');
+
+        $stmtPretEx = $pdo->prepare("SELECT COUNT(*) FROM loans WHERE cycle_id = ? AND cycle_member_id = ? AND statut IN ('en_attente', 'approuve', 'en_retard')");
+        $stmtPretEx->execute([$cid, (int)$mon_cycle_member['id']]);
+        $a_deja_pret = ((int)$stmtPretEx->fetchColumn() > 0);
+
+        $solde_dispo = (float)($cycle['solde_caisse_reserve'] ?? 0);
+        $dt_ech_obj  = DateTime::createFromFormat('!Y-m-d', $date_ech_pret);
+
+        if ($cycle['statut'] !== 'actif' || ($derniere_ech_c !== '' && $aujourdhui_p >= $derniere_ech_c)) {
+            message_flash('danger', 'Impossible de demander un prêt : la dernière séance de ce cycle est déjà atteinte ou dépassée.');
+        } elseif ($a_deja_pret) {
+            message_flash('warning', 'Vous avez déjà une demande de prêt en attente ou un prêt en cours sur ce cycle.');
+        } elseif ($montant_pret === false || $montant_pret <= 0 || $montant_pret > $solde_dispo) {
+            message_flash('danger', 'Montant invalide ou supérieur au solde disponible dans la caisse du cycle (' . format_fcfa($solde_dispo) . ').');
+        } elseif (!$dt_ech_obj || $date_ech_pret <= $aujourdhui_p || ($derniere_ech_c !== '' && $date_ech_pret > $derniere_ech_c)) {
+            message_flash('danger', 'La date de remboursement doit être comprise entre demain et la fin de la dernière séance du cycle (' . date('d/m/Y', strtotime($derniere_ech_c)) . ').');
+        } elseif ($motif_pret === '') {
+            message_flash('danger', 'Veuillez préciser le motif de votre demande de prêt.');
+        } else {
+            $pdo->prepare("
+                INSERT INTO loans (cycle_id, cycle_member_id, montant_demande, montant_total_du, motif, statut, date_demande, date_echeance)
+                VALUES (?, ?, ?, ?, ?, 'en_attente', ?, ?)
+            ")->execute([$cid, (int)$mon_cycle_member['id'], round((float)$montant_pret, 2), round((float)$montant_pret, 2), $motif_pret, date_actuelle('Y-m-d H:i:s'), $date_ech_pret]);
+            message_flash('success', 'Votre demande de prêt de ' . format_fcfa($montant_pret) . ' a été enregistrée. En attente de validation par l\'administrateur.');
+        }
+        header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=prets');
+        exit;
+    }
+
+    // ACTION G (ADMIN) : Approuver un prêt en fixant le pourcentage d'intérêt (débit atomique de la caisse)
+    if ($est_admin && $action === 'approuver_pret') {
+        $loan_id    = (int)($_POST['loan_id'] ?? 0);
+        $taux_int   = filter_var($_POST['taux_interet'] ?? null, FILTER_VALIDATE_FLOAT);
+        $comm_admin = trim($_POST['commentaire_admin'] ?? '');
+
+        if ($taux_int === false || $taux_int < 0 || $taux_int > 100) {
+            message_flash('danger', 'Veuillez saisir un pourcentage d\'intérêt valide (entre 0 % et 100 %).');
+        } else {
+            try {
+                $pdo->beginTransaction();
+                $stmtCycLock = $pdo->prepare("SELECT solde_caisse_reserve FROM cycles WHERE id = ? FOR UPDATE");
+                $stmtCycLock->execute([$cid]);
+                $solde_reel = (float)$stmtCycLock->fetchColumn();
+
+                $stmtL = $pdo->prepare("SELECT * FROM loans WHERE id = ? AND cycle_id = ? AND statut = 'en_attente' FOR UPDATE");
+                $stmtL->execute([$loan_id, $cid]);
+                $loan_row = $stmtL->fetch();
+
+                if (!$loan_row) {
+                    $pdo->rollBack();
+                    message_flash('warning', 'Cette demande de prêt n\'est plus en attente.');
+                } elseif ((float)$loan_row['montant_demande'] > $solde_reel + 0.001) {
+                    $pdo->rollBack();
+                    message_flash('danger', 'Solde de caisse insuffisant (' . format_fcfa($solde_reel) . ') pour approuver ce prêt de ' . format_fcfa($loan_row['montant_demande']) . '.');
+                } else {
+                    $capital   = round((float)$loan_row['montant_demande'], 2);
+                    $taux_ok   = round((float)$taux_int, 2);
+                    $interet   = round(($capital * $taux_ok) / 100, 2);
+                    $total_du  = round($capital + $interet, 2);
+
+                    $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve - ? WHERE id = ?")
+                        ->execute([$capital, $cid]);
+
+                    $pdo->prepare("
+                        UPDATE loans
+                        SET taux_interet = ?, montant_interet_initial = ?, montant_total_du = ?,
+                            statut = 'approuve', seance_approbation = ?, date_decision = ?, decide_par_id = ?, commentaire_admin = ?
+                        WHERE id = ?
+                    ")->execute([$taux_ok, $interet, $total_du, $seance_max_ouverte, date_actuelle('Y-m-d H:i:s'), $user_id, $comm_admin !== '' ? $comm_admin : null, $loan_id]);
+
+                    $pdo->commit();
+                    synchroniser_horloge_et_retards($pdo);
+                    message_flash('success', 'Prêt approuvé ! ' . format_fcfa($capital) . ' sortis de la caisse. Total à rembourser : ' . format_fcfa($total_du) . ' (intérêt ' . $taux_ok . ' %).');
+                }
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                message_flash('danger', 'Erreur lors de la validation du prêt.');
+            }
+        }
+        header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=prets');
+        exit;
+    }
+
+    // ACTION H (ADMIN) : Refuser une demande de prêt
+    if ($est_admin && $action === 'refuser_pret') {
+        $loan_id    = (int)($_POST['loan_id'] ?? 0);
+        $comm_admin = trim($_POST['commentaire_admin'] ?? '');
+        $pdo->prepare("
+            UPDATE loans SET statut = 'refuse', date_decision = ?, decide_par_id = ?, commentaire_admin = ?
+            WHERE id = ? AND cycle_id = ? AND statut = 'en_attente'
+        ")->execute([date_actuelle('Y-m-d H:i:s'), $user_id, $comm_admin !== '' ? $comm_admin : 'Demande refusée par l\'administrateur', $loan_id, $cid]);
+        message_flash('info', 'La demande de prêt a été refusée.');
+        header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=prets');
+        exit;
+    }
+
+    // ACTION I (MEMBRE) : Rembourser un prêt (par tranches ou en totalité)
+    if ($action === 'rembourser_pret' && $mon_cycle_member) {
+        $loan_id       = (int)($_POST['loan_id'] ?? 0);
+        $montant_remb  = filter_var($_POST['montant_remb'] ?? null, FILTER_VALIDATE_FLOAT);
+        $mode_paiement = trim($_POST['mode_paiement'] ?? 'momo');
+
+        $stmtL = $pdo->prepare("SELECT * FROM loans WHERE id = ? AND cycle_id = ? AND cycle_member_id = ? AND statut IN ('approuve', 'en_retard') LIMIT 1");
+        $stmtL->execute([$loan_id, $cid, (int)$mon_cycle_member['id']]);
+        $loan_r = $stmtL->fetch();
+
+        if (!$loan_r) {
+            message_flash('danger', 'Prêt introuvable ou déjà remboursé.');
+        } elseif (!in_array($mode_paiement, ['momo', 'om', 'especes'], true)) {
+            message_flash('danger', 'Mode de paiement invalide.');
+        } else {
+            $reste_pret = round(max(0.0, (float)$loan_r['montant_total_du'] - (float)$loan_r['montant_rembourse']), 2);
+            if ($montant_remb === false || $montant_remb <= 0 || $montant_remb > $reste_pret + 0.01) {
+                message_flash('danger', 'Montant invalide (maximum autorisé : ' . format_fcfa($reste_pret) . ').');
+            } else {
+                $mt_ok   = round(min((float)$montant_remb, $reste_pret), 2);
+                $nv_remb = round((float)$loan_r['montant_rembourse'] + $mt_ok, 2);
+                $solde_ok = ($nv_remb + 0.01 >= (float)$loan_r['montant_total_du']);
+                $ref_lr  = 'REMB-PRET-' . $loan_id . '-' . date_actuelle('ymd') . '-' . random_int(100, 999);
+
+                $pdo->beginTransaction();
+                $pdo->prepare("
+                    UPDATE loans
+                    SET montant_rembourse = ?,
+                        statut = ?,
+                        date_remboursement_complet = CASE WHEN ? = 1 THEN ? ELSE date_remboursement_complet END
+                    WHERE id = ?
+                ")->execute([$nv_remb, $solde_ok ? 'rembourse' : $loan_r['statut'], $solde_ok ? 1 : 0, date_actuelle('Y-m-d H:i:s'), $loan_id]);
+
+                $pdo->prepare("UPDATE cycles SET solde_caisse_reserve = solde_caisse_reserve + ? WHERE id = ?")
+                    ->execute([$mt_ok, $cid]);
+
+                $pdo->prepare("
+                    INSERT INTO loan_repayments (loan_id, paye_par_user_id, montant, mode_paiement, reference_paiement, date_paiement, commentaire)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ")->execute([
+                    $loan_id, $user_id, $mt_ok, $mode_paiement, $ref_lr, date_actuelle('Y-m-d H:i:s'),
+                    $solde_ok ? "Remboursement final du prêt #{$loan_id} -> Caisse du cycle" : "Remboursement partiel (tranche) du prêt #{$loan_id} -> Caisse du cycle"
+                ]);
+                $pdo->commit();
+
+                synchroniser_horloge_et_retards($pdo);
+                message_flash('success', 'Remboursement de ' . format_fcfa($mt_ok) . ' enregistré dans la caisse du cycle !');
+            }
+        }
+        header('Location: ' . BASE_URL . '/finances.php?cycle_id=' . $cid . '&tab=prets');
+        exit;
+    }
 }
 
 // Recharger le cycle après les éventuelles mises à jour (ex: clôture auto ou mise à jour du solde caisse)
@@ -550,6 +709,61 @@ if ($cycle) {
     }
 }
 
+
+// Chargement des prêts du cycle (Admin = tous les prêts ; Membre = uniquement les siens)
+$liste_prets              = [];
+$mes_remboursements_prets = [];
+$derniere_ech_pret_max    = '';
+$nb_prets_attente_admin   = 0;
+
+if ($cycle) {
+    $stmtMaxEchP = $pdo->prepare("SELECT MAX(co.date_echeance) FROM contributions co INNER JOIN cycle_members cm ON cm.id = co.cycle_member_id WHERE cm.cycle_id = ?");
+    $stmtMaxEchP->execute([$cid]);
+    $derniere_ech_pret_max = (string)($stmtMaxEchP->fetchColumn() ?: ($cycle['date_fin'] ?? ''));
+
+    try {
+        if ($est_admin) {
+            $stmtLP = $pdo->prepare("
+                SELECT l.*, u.id AS membre_user_id, u.nom_complet, u.telephone
+                FROM loans l
+                INNER JOIN cycle_members cm ON cm.id = l.cycle_member_id
+                INNER JOIN users u ON u.id = cm.user_id
+                WHERE l.cycle_id = ?
+                ORDER BY FIELD(l.statut, 'en_attente', 'en_retard', 'approuve', 'rembourse', 'refuse'), l.date_demande DESC
+            ");
+            $stmtLP->execute([$cid]);
+            $liste_prets = $stmtLP->fetchAll();
+            foreach ($liste_prets as $lp_c) {
+                if ($lp_c['statut'] === 'en_attente') $nb_prets_attente_admin++;
+            }
+        } elseif ($mon_cycle_member) {
+            $stmtLP = $pdo->prepare("
+                SELECT l.*, u.id AS membre_user_id, u.nom_complet, u.telephone
+                FROM loans l
+                INNER JOIN cycle_members cm ON cm.id = l.cycle_member_id
+                INNER JOIN users u ON u.id = cm.user_id
+                WHERE l.cycle_id = ? AND l.cycle_member_id = ?
+                ORDER BY l.date_demande DESC
+            ");
+            $stmtLP->execute([$cid, (int)$mon_cycle_member['id']]);
+            $liste_prets = $stmtLP->fetchAll();
+        }
+
+        $stmtRecPr = $pdo->prepare("
+            SELECT lr.*, l.motif AS motif_pret
+            FROM loan_repayments lr
+            INNER JOIN loans l ON l.id = lr.loan_id
+            WHERE lr.paye_par_user_id = ? AND l.cycle_id = ?
+            ORDER BY lr.date_paiement DESC, lr.id DESC
+        ");
+        $stmtRecPr->execute([$user_id, $cid]);
+        $mes_remboursements_prets = $stmtRecPr->fetchAll();
+    } catch (PDOException $e) {
+        $liste_prets = [];
+    }
+}
+
+
 $titre_page = $est_admin ? "Cotisations, Reçus & Caisse du Cycle" : "Mes Cotisations, Reçus & Pénalités";
 require_once __DIR__ . '/includes/header.php';
 require_once __DIR__ . '/includes/navbar.php';
@@ -655,6 +869,14 @@ require_once __DIR__ . '/includes/navbar.php';
                 <button class="nav-link <?= $onglet_actif === 'caisse' ? 'active' : '' ?>" data-bs-toggle="pill" data-bs-target="#tabCaisse" type="button">
                     <i class="bi <?= $est_admin ? 'bi-piggy-bank' : 'bi-exclamation-diamond' ?> me-1"></i>
                     <?= $est_admin ? '3. Caisse du Cycle & Pénalités' : '3. Mes Pénalités (' . count($operations_caisse) . ')' ?>
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link <?= $onglet_actif === 'prets' ? 'active' : '' ?>" data-bs-toggle="pill" data-bs-target="#tabPrets" type="button">
+                    <i class="bi bi-bank me-1"></i>Prêts Caisse (<?= count($liste_prets) ?>)
+                    <?php if ($est_admin && $nb_prets_attente_admin > 0): ?>
+                        <span class="badge bg-warning text-dark ms-1"><?= $nb_prets_attente_admin ?></span>
+                    <?php endif; ?>
                 </button>
             </li>
             <?php if ($est_admin): ?>
@@ -821,6 +1043,38 @@ require_once __DIR__ . '/includes/navbar.php';
                                         <td class="text-end fw-bold"><?= format_fcfa($p['montant_total']) ?></td>
                                         <td class="text-end text-success fw-semibold"><?= format_fcfa($p['part_beneficiaire']) ?></td>
                                         <td class="text-end text-warning fw-semibold"><?= format_fcfa($p['part_caisse_reserve']) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+                <?php if (!empty($mes_remboursements_prets)): ?>
+                    <hr class="my-4">
+                    <h6 class="fw-bold mb-3"><i class="bi bi-bank2 text-success me-2"></i>Mes reçus de remboursement de prêts (Caisse du cycle)</h6>
+                    <div class="table-responsive">
+                        <table class="table table-djangui align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Référence & Date</th>
+                                    <th>Détail du Prêt</th>
+                                    <th>Canal</th>
+                                    <th class="text-end">Montant Remboursé</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($mes_remboursements_prets as $rp): ?>
+                                    <tr>
+                                        <td>
+                                            <code class="fw-bold"><?= e($rp['reference_paiement']) ?></code>
+                                            <div class="small text-muted"><?= date('d/m/Y H:i', strtotime($rp['date_paiement'])) ?></div>
+                                        </td>
+                                        <td>
+                                            <div class="fw-semibold">Prêt #<?= (int)$rp['loan_id'] ?> — <?= e($rp['motif_pret']) ?></div>
+                                            <small class="text-muted"><?= e($rp['commentaire']) ?></small>
+                                        </td>
+                                        <td><span class="badge bg-info-subtle text-info border"><?= strtoupper(e($rp['mode_paiement'])) ?></span></td>
+                                        <td class="text-end text-success fw-bold"><?= format_fcfa($rp['montant']) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -1094,6 +1348,124 @@ require_once __DIR__ . '/includes/navbar.php';
             </div>
         </div>
         <?php endif; ?>
+
+
+        <!-- =============================================================== -->
+        <!-- ONGLET PRÊTS CAISSE (MEMBRE = SES PRÊTS | ADMIN = TOUS + VALIDATION) -->
+        <!-- =============================================================== -->
+        <div class="tab-pane fade <?= $onglet_actif === 'prets' ? 'show active' : '' ?>" id="tabPrets">
+            <div class="card card-djangui p-4">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <div>
+                        <h5 class="fw-bold mb-1"><i class="bi bi-bank text-primary me-2"></i>Prêts sur la Caisse de Réserve — <?= e($cycle['titre'] ?? '') ?></h5>
+                        <p class="text-muted small mb-0">
+                            Solde disponible : <strong class="text-success"><?= format_fcfa($cycle['solde_caisse_reserve'] ?? 0) ?></strong> ·
+                            En cas de retard après la date limite, l'intérêt simple initial s'ajoute à chaque séance écoulée sans remboursement complet (et une retenue automatique s'applique sur votre futur pot).
+                        </p>
+                    </div>
+                    <?php if ($mon_cycle_member && $cycle && $cycle['statut'] === 'actif' && (float)$cycle['solde_caisse_reserve'] > 0 && ($derniere_ech_pret_max === '' || date_actuelle('Y-m-d') < $derniere_ech_pret_max)): ?>
+                        <button type="button" class="btn btn-sm btn-glow-emerald" data-bs-toggle="modal" data-bs-target="#modalDemandePret">
+                            <i class="bi bi-plus-circle me-1"></i>Demander un prêt
+                        </button>
+                    <?php endif; ?>
+                </div>
+
+                <?php if (empty($liste_prets)): ?>
+                    <div class="p-4 rounded-3 box-adaptive text-center text-muted">
+                        Aucun prêt enregistré sur ce cycle pour le moment.
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="table table-djangui align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <?php if ($est_admin): ?><th>Emprunteur</th><?php endif; ?>
+                                    <th>Montant & Intérêts</th>
+                                    <th>Échéance</th>
+                                    <th>Remboursé / Total Dû</th>
+                                    <th>Statut</th>
+                                    <th class="text-end">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($liste_prets as $lp):
+                                    $reste_lp = round(max(0.0, (float)$lp['montant_total_du'] - (float)$lp['montant_rembourse']), 2);
+                                    $est_mon_pret = ((int)$lp['membre_user_id'] === $user_id);
+                                ?>
+                                <tr>
+                                    <?php if ($est_admin): ?>
+                                        <td>
+                                            <div class="fw-bold"><?= e($lp['nom_complet']) ?></div>
+                                            <small class="text-muted"><?= e($lp['telephone']) ?></small>
+                                        </td>
+                                    <?php endif; ?>
+                                    <td>
+                                        <div class="fw-bold"><?= format_fcfa($lp['montant_demande']) ?></div>
+                                        <small class="text-muted d-block"><?= e($lp['motif']) ?></small>
+                                        <?php if ($lp['statut'] !== 'en_attente' && $lp['statut'] !== 'refuse'): ?>
+                                            <small class="text-primary fw-semibold">
+                                                Taux : <?= (float)$lp['taux_interet'] ?> % (+<?= format_fcfa($lp['montant_interet_initial']) ?>)
+                                                <?php if ((int)$lp['nb_majorations'] > 0): ?>
+                                                    · <span class="text-danger">+<?= (int)$lp['nb_majorations'] ?> maj. (+<?= format_fcfa($lp['montant_majorations']) ?>)</span>
+                                                <?php endif; ?>
+                                            </small>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="small fw-semibold">
+                                        <?= date('d/m/Y', strtotime($lp['date_echeance'])) ?>
+                                    </td>
+                                    <td>
+                                        <strong class="text-success"><?= format_fcfa($lp['montant_rembourse']) ?></strong>
+                                        <span class="text-muted small">/ <?= format_fcfa($lp['montant_total_du']) ?></span>
+                                        <?php if ($reste_lp > 0 && in_array($lp['statut'], ['approuve', 'en_retard'], true)): ?>
+                                            <div class="small text-danger fw-semibold">Reste : <?= format_fcfa($reste_lp) ?></div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($lp['statut'] === 'rembourse'): ?>
+                                            <span class="badge bg-success">Remboursé</span>
+                                        <?php elseif ($lp['statut'] === 'en_retard'): ?>
+                                            <span class="badge bg-danger">En retard</span>
+                                        <?php elseif ($lp['statut'] === 'approuve'): ?>
+                                            <span class="badge bg-primary">Approuvé</span>
+                                        <?php elseif ($lp['statut'] === 'refuse'): ?>
+                                            <span class="badge bg-secondary">Refusé</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-warning text-dark">En attente</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-end">
+                                        <?php if ($est_admin && $lp['statut'] === 'en_attente'): ?>
+                                            <form method="POST" action="finances.php?cycle_id=<?= $cid ?>&tab=prets" class="d-inline-flex align-items-center gap-1 flex-wrap justify-content-end">
+                                                <?= champ_csrf() ?>
+                                                <input type="hidden" name="loan_id" value="<?= (int)$lp['id'] ?>">
+                                                <input type="number" name="taux_interet" class="form-control form-control-sm" style="width:75px;" min="0" max="100" step="0.5" value="10" title="Intérêt (%)" required>
+                                                <span class="small fw-bold">%</span>
+                                                <button type="submit" name="action" value="approuver_pret" class="btn btn-sm btn-success" title="Approuver avec ce taux">
+                                                    <i class="bi bi-check-lg"></i> Valider
+                                                </button>
+                                                <button type="submit" name="action" value="refuser_pret" class="btn btn-sm btn-outline-danger" onclick="return confirm('Refuser cette demande de prêt ?');">
+                                                    <i class="bi bi-x-lg"></i>
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+
+                                        <?php if ($est_mon_pret && in_array($lp['statut'], ['approuve', 'en_retard'], true) && $reste_lp > 0): ?>
+                                            <button type="button" class="btn btn-sm <?= $lp['statut'] === 'en_retard' ? 'btn-danger' : 'btn-glow-emerald' ?>"
+                                                    data-bs-toggle="modal" data-bs-target="#modalRembPret"
+                                                    onclick="document.getElementById('inputLoanIdRemb').value='<?= (int)$lp['id'] ?>'; document.getElementById('inputMontantRemb').max='<?= $reste_lp ?>'; document.getElementById('inputMontantRemb').value='<?= $reste_lp ?>'; document.getElementById('lblRestePret').textContent='<?= number_format($reste_lp, 0, ',', ' ') ?> FCFA';">
+                                                <i class="bi bi-cash-stack me-1"></i>Rembourser
+                                            </button>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
     </div>
 </main>
 
@@ -1299,5 +1671,83 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 </script>
+
+<!-- MODALE DEMANDE DE PRÊT -->
+<?php if ($mon_cycle_member && $cycle): ?>
+<div class="modal fade" id="modalDemandePret" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content card-djangui">
+            <form method="POST" action="finances.php?cycle_id=<?= $cid ?>&tab=prets">
+                <?= champ_csrf() ?>
+                <input type="hidden" name="action" value="demander_pret">
+                <input type="hidden" name="cycle_id" value="<?= $cid ?>">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-bank me-2 text-success"></i>Demander un prêt à la caisse</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="p-2 rounded-3 box-adaptive small mb-3">
+                        Solde disponible en caisse : <strong class="text-success"><?= format_fcfa($cycle['solde_caisse_reserve']) ?></strong><br>
+                        Date limite maximale : <strong><?= $derniere_ech_pret_max ? date('d/m/Y', strtotime($derniere_ech_pret_max)) : '-' ?></strong> (fin du cycle).
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Montant souhaité (FCFA) *</label>
+                        <input type="number" name="montant_demande" class="form-control fw-bold" min="100" max="<?= (float)$cycle['solde_caisse_reserve'] ?>" step="any" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Date limite de remboursement *</label>
+                        <input type="date" name="date_echeance" class="form-control"
+                               min="<?= date('Y-m-d', strtotime(date_actuelle('Y-m-d') . ' +1 day')) ?>"
+                               max="<?= e($derniere_ech_pret_max) ?>" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">Motif du prêt *</label>
+                        <input type="text" name="motif" class="form-control" maxlength="255" placeholder="Ex: Urgence médicale, projet personnel..." required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="submit" class="btn btn-glow-emerald">Envoyer la demande</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- MODALE REMBOURSEMENT DE PRÊT (PAR TRANCHES OU TOTAL) -->
+<div class="modal fade" id="modalRembPret" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content card-djangui">
+            <form method="POST" action="finances.php?cycle_id=<?= $cid ?>&tab=prets">
+                <?= champ_csrf() ?>
+                <input type="hidden" name="action" value="rembourser_pret">
+                <input type="hidden" name="cycle_id" value="<?= $cid ?>">
+                <input type="hidden" name="loan_id" id="inputLoanIdRemb">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-cash-stack me-2 text-success"></i>Rembourser mon prêt</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="small mb-2">Reste total à rembourser : <strong id="lblRestePret" class="text-danger"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Montant de cette tranche (FCFA) *</label>
+                        <input type="number" name="montant_remb" id="inputMontantRemb" class="form-control form-control-lg fw-bold text-success" min="1" step="any" required>
+                    </div>
+                    <label class="form-label small fw-semibold">Canal de paiement :</label>
+                    <select name="mode_paiement" class="form-select form-select-sm">
+                        <option value="momo">MTN MoMo</option>
+                        <option value="om">Orange Money</option>
+                        <option value="especes">Espèces</option>
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="submit" class="btn btn-glow-emerald">Confirmer le remboursement</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
