@@ -17,7 +17,7 @@ require_once __DIR__ . '/includes/navbar.php';
 <section class="hero-video-section mb-4">
     <!-- Vidéo muette en lecture automatique et en boucle infinie -->
     <video class="hero-video-bg" autoplay muted loop playsinline>
-        <source src="<?= BASE_URL ?>/assets/videos/hero.mp4" type="video/mp4">
+        <source src="<?= BASE_URL ?>/assets/video/hero.mp4" type="video/mp4">
     </video>
 
     <!-- Voile sombre élégant pour faire ressortir le texte et la carte -->
